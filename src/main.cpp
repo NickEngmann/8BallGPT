@@ -12,6 +12,61 @@ Adafruit_LSM6DS3TRC lsm6ds3trc;
 
 #include "lv_xiao_round_screen.h"
 #include "lv_hardware_test.h"
+#include <WiFiManager.h>
+#include <WiFi.h>
+
+// Global variables
+WiFiManager wifiManager;
+bool isShaking = false;
+unsigned long lastShakeTime = 0;
+unsigned long phraseStartTime = 0;
+const int SHAKE_THRESHOLD = 20;      // Adjust this value based on testing
+const char *currentState = "NORMAL"; // NORMAL, SHAKING, SHOWING_PHRASE
+
+// Magic 8 ball responses
+const char *responses[] = {
+    "It is certain",
+    "Reply hazy, try again",
+    "Ask again later",
+    "Don't count on it",
+    "My reply is no",
+    "Outlook not so good",
+    "Very doubtful",
+    "Concentrate and ask again"};
+
+// WiFi status label
+lv_obj_t *wifi_label;
+
+// Magic 8 Ball label
+lv_obj_t *magic_label;
+
+// Function to check if device is being shaken
+bool checkShaking(sensors_event_t &accel)
+{
+  float magnitude = sqrt(
+      accel.acceleration.x * accel.acceleration.x +
+      accel.acceleration.y * accel.acceleration.y +
+      accel.acceleration.z * accel.acceleration.z);
+  return abs(magnitude - 9.81) > SHAKE_THRESHOLD;
+}
+
+// Callback for WiFi status updates
+void updateWiFiStatus(void *parameter)
+{
+  for (;;)
+  {
+    if (WiFi.status() == WL_CONNECTED)
+    {
+      String ip = WiFi.localIP().toString();
+      lv_label_set_text_fmt(wifi_label, "WiFi: Connected\nIP: %s", ip.c_str());
+    }
+    else
+    {
+      lv_label_set_text(wifi_label, "WiFi: Disconnected");
+    }
+    vTaskDelay(pdMS_TO_TICKS(5000));
+  }
+}
 
 void setup()
 {
@@ -32,83 +87,6 @@ void setup()
   }
   Serial.println("LSM6DS3TR-C Found!");
 
-  // lsm6ds3trc.setAccelRange(LSM6DS_ACCEL_RANGE_2_G);
-  Serial.print("Accelerometer range set to: ");
-  switch (lsm6ds3trc.getAccelRange())
-  {
-  case LSM6DS_ACCEL_RANGE_2_G:
-    Serial.println("+-2G");
-    break;
-  case LSM6DS_ACCEL_RANGE_4_G:
-    Serial.println("+-4G");
-    break;
-  case LSM6DS_ACCEL_RANGE_8_G:
-    Serial.println("+-8G");
-    break;
-  case LSM6DS_ACCEL_RANGE_16_G:
-    Serial.println("+-16G");
-    break;
-  }
-  Serial.print("Gyro range set to: ");
-  switch (lsm6ds3trc.getGyroRange())
-  {
-    case LSM6DS_GYRO_RANGE_125_DPS:
-      Serial.println("125 degrees/s");
-      break;
-    case LSM6DS_GYRO_RANGE_250_DPS:
-      Serial.println("250 degrees/s");
-      break;
-    case LSM6DS_GYRO_RANGE_500_DPS:
-      Serial.println("500 degrees/s");
-      break;
-    case LSM6DS_GYRO_RANGE_1000_DPS:
-      Serial.println("1000 degrees/s");
-      break;
-    case LSM6DS_GYRO_RANGE_2000_DPS:
-      Serial.println("2000 degrees/s");
-      break;
-    case ISM330DHCX_GYRO_RANGE_4000_DPS:
-    break; // unsupported range for the DS33
-  }
-  // lsm6ds3trc.setGyroDataRate(LSM6DS_RATE_12_5_HZ);
-  Serial.print("Gyro data rate set to: ");
-  switch (lsm6ds3trc.getGyroDataRate())
-  {
-  case LSM6DS_RATE_SHUTDOWN:
-    Serial.println("0 Hz");
-    break;
-  case LSM6DS_RATE_12_5_HZ:
-    Serial.println("12.5 Hz");
-    break;
-  case LSM6DS_RATE_26_HZ:
-    Serial.println("26 Hz");
-    break;
-  case LSM6DS_RATE_52_HZ:
-    Serial.println("52 Hz");
-    break;
-  case LSM6DS_RATE_104_HZ:
-    Serial.println("104 Hz");
-    break;
-  case LSM6DS_RATE_208_HZ:
-    Serial.println("208 Hz");
-    break;
-  case LSM6DS_RATE_416_HZ:
-    Serial.println("416 Hz");
-    break;
-  case LSM6DS_RATE_833_HZ:
-    Serial.println("833 Hz");
-    break;
-  case LSM6DS_RATE_1_66K_HZ:
-    Serial.println("1.66 KHz");
-    break;
-  case LSM6DS_RATE_3_33K_HZ:
-    Serial.println("3.33 KHz");
-    break;
-  case LSM6DS_RATE_6_66K_HZ:
-    Serial.println("6.66 KHz");
-    break;
-  }
-
   lsm6ds3trc.configInt1(false, false, true); // accelerometer DRDY on INT1
   lsm6ds3trc.configInt2(false, true, false); // gyro DRDY on INT2
   lv_init();
@@ -116,38 +94,87 @@ void setup()
   lv_xiao_disp_init();
   lv_xiao_touch_init();
 
-  lv_hardware_test();
-  }
+  // WiFi setup
+  wifiManager.setConfigPortalBlocking(false);
+  WiFi.mode(WIFI_STA); // explicitly set mode, esp defaults to STA+AP
+  // Set custom IP for portal
+  IPAddress portalIP(8, 8, 4, 4);
+  IPAddress gateway(8, 8, 4, 4);
+  IPAddress subnet(255, 255, 255, 0);
+  wifiManager.setAPStaticIPConfig(portalIP, gateway, subnet);
+  wifiManager.autoConnect("Magic8Ball_AP");
 
+  // Create WiFi status label
+  wifi_label = lv_label_create(lv_scr_act());
+  lv_obj_set_pos(wifi_label, 10, 10);
+  lv_label_set_text(wifi_label, "WiFi: Disconnected");
+
+  // Create Magic 8 Ball label
+  magic_label = lv_label_create(lv_scr_act());
+  lv_obj_align(magic_label, LV_ALIGN_CENTER, 0, 0);
+  lv_label_set_text(magic_label, "Magic 8 Ball");
+
+  // Start WiFi status monitoring task
+  xTaskCreate(
+      updateWiFiStatus,
+      "WiFiStatus",
+      2048,
+      NULL,
+      1,
+      NULL);
+}
+
+// Replace your loop() function with:
 void loop()
 {
+  // Handle WiFi configuration portal
+  wifiManager.process();
+
   sensors_event_t accel;
   sensors_event_t gyro;
   sensors_event_t temp;
   lsm6ds3trc.getEvent(&accel, &gyro, &temp);
 
-  Serial.print("\t\tTemperature ");
-  Serial.print(temp.temperature);
-  Serial.println(" deg C");
+  unsigned long currentTime = millis();
 
-  /* Display the results (acceleration is measured in m/s^2) */
-  Serial.print("\t\tAccel X: ");
-  Serial.print(accel.acceleration.x);
-  Serial.print(" \tY: ");
-  Serial.print(accel.acceleration.y);
-  Serial.print(" \tZ: ");
-  Serial.print(accel.acceleration.z);
-  Serial.println(" m/s^2 ");
+  // Check device state and update display accordingly
+  if (strcmp(currentState, "NORMAL") == 0)
+  {
+    if (checkShaking(accel))
+    {
+      currentState = "SHAKING";
+      isShaking = true;
+      lastShakeTime = currentTime;
+      lv_label_set_text(magic_label, "Shaking");
+    }
+  }
+  else if (strcmp(currentState, "SHAKING") == 0)
+  {
+    if (!checkShaking(accel))
+    {
+      if (currentTime - lastShakeTime > 5000)
+      {
+        currentState = "SHOWING_PHRASE";
+        phraseStartTime = currentTime;
+        // Select random response
+        int responseIndex = random(8);
+        lv_label_set_text(magic_label, responses[responseIndex]);
+      }
+    }
+    else
+    {
+      lastShakeTime = currentTime;
+    }
+  }
+  else if (strcmp(currentState, "SHOWING_PHRASE") == 0)
+  {
+    if (currentTime - phraseStartTime > 6000)
+    {
+      currentState = "NORMAL";
+      lv_label_set_text(magic_label, "Magic 8 Ball");
+    }
+  }
 
-  /* Display the results (rotation is measured in rad/s) */
-  Serial.print("\t\tGyro X: ");
-  Serial.print(gyro.gyro.x);
-  Serial.print(" \tY: ");
-  Serial.print(gyro.gyro.y);
-  Serial.print(" \tZ: ");
-  Serial.print(gyro.gyro.z);
-  Serial.println(" radians/s ");
-  Serial.println();
-  lv_timer_handler(); // let the GUI do its work
-  delay(500);
+  lv_timer_handler();
+  delay(50); // Small delay to prevent overwhelming the processor
 }
