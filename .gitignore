@@ -1,3 +1,10 @@
+.pioenvs
+.piolibdeps
+.clang_complete
+.gcc-flags.json
+.pio/
+.vscode/
+
 # Prerequisites
 *.d
 
@@ -50,3 +57,5 @@ modules.order
 Module.symvers
 Mkfile.old
 dkms.conf
+.vscode/c_cpp_properties.json
+.pio/build/seeed_xiao_esp32s3/idedata.json
