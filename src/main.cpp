@@ -1,14 +1,14 @@
+/*Using LVGL with Arduino requires some extra steps:
+ *Be sure to read the docs here: https://docs.lvgl.io/master/get-started/platforms/arduino.html  */
 #include <Arduino.h>
 #include <lvgl.h>
 // #include <SPIFFS.h>
-#include <Adafruit_LSM6DS3TRC.h>
+#include <TFT_eSPI.h>
+#include <lv_conf.h>
 #include <WiFiManager.h>
 #include <WiFi.h>
 #include "AudioTools.h"
-
-// Display includes
-#define USE_TFT_ESPI_LIBRARY
-#include "lv_xiao_round_screen.h"
+#include <demos/lv_demos.h>
 
 // I2S configuration
 const int i2s_bck = 44; // BCLK -> GPIO44 (RX)
@@ -25,7 +25,6 @@ StreamCopy copier(csvStream, i2sStream);
 AudioInfo info(sample_rate, channels, bits_per_sample);
 
 // Global objects
-Adafruit_LSM6DS3TRC lsm6ds3trc;
 WiFiManager wifiManager;
 
 // Global variables
@@ -45,28 +44,16 @@ const char *responses[] = {
     "My reply is no",
     "Outlook not so good",
     "Very doubtful",
-    "Concentrate and ask again"};
+    "Concentrate and ask again"
+};
 
 // UI elements
 lv_obj_t *wifi_label;
 lv_obj_t *magic_label;
 
-// Function declarations
-bool checkShaking(sensors_event_t &accel);
 void startRecording();
 void stopRecording();
 void updateWiFiStatus(void *parameter);
-
-// Function to check if device is being shaken
-bool checkShaking(sensors_event_t &accel)
-{
-  float magnitude = sqrt(
-      accel.acceleration.x * accel.acceleration.x +
-      accel.acceleration.y * accel.acceleration.y +
-      accel.acceleration.z * accel.acceleration.z);
-  return abs(magnitude - 9.81) > SHAKE_THRESHOLD;
-}
-
 void startRecording()
 {
   if (!isRecording)
@@ -116,27 +103,141 @@ void updateWiFiStatus(void *parameter)
   }
 }
 
+/*To use the built-in examples and demos of LVGL uncomment the includes below respectively.
+ *You also need to copy `lvgl/examples` to `lvgl/src/examples`. Similarly for the demos `lvgl/demos` to `lvgl/src/demos`.
+ Note that the `lv_examples` library is for LVGL v7 and you shouldn't install it for this version (since LVGL v8)
+ as the examples and demos are now part of the main LVGL library. */
+
+#define EXAMPLE_LVGL_TICK_PERIOD_MS 2
+
+/*Change to your screen resolution*/
+static const uint16_t screenWidth = 240;
+static const uint16_t screenHeight = 240;
+
+static lv_disp_draw_buf_t draw_buf;
+static lv_color_t buf[screenWidth * screenHeight / 10];
+
+TFT_eSPI tft = TFT_eSPI(screenWidth, screenHeight); /* TFT instance */
+
+LV_IMG_DECLARE(test1_240_240_4);
+LV_IMG_DECLARE(test2);
+LV_IMG_DECLARE(test3);
+#if LV_USE_LOG != 0
+/* Serial debugging */
+void my_print(const char *buf)
+{
+  Serial.printf(buf);
+  Serial.flush();
+}
+#endif
+
+/* Display flushing */
+void my_disp_flush(lv_disp_drv_t *disp_drv, const lv_area_t *area, lv_color_t *color_p)
+{
+  uint32_t w = (area->x2 - area->x1 + 1);
+  uint32_t h = (area->y2 - area->y1 + 1);
+
+  tft.startWrite();
+  tft.setAddrWindow(area->x1, area->y1, w, h);
+  tft.pushColors((uint16_t *)&color_p->full, w * h, true);
+  tft.endWrite();
+
+  lv_disp_flush_ready(disp_drv);
+}
+
+void example_increase_lvgl_tick(void *arg)
+{
+  /* Tell LVGL how many milliseconds has elapsed */
+  // lv_tick_inc(EXAMPLE_LVGL_TICK_PERIOD_MS);
+}
+
+static uint8_t count = 0;
+void example_increase_reboot(void *arg)
+{
+  count++;
+  if (count % 2)
+  {
+    // esp_restart();
+    lv_obj_t *icon = lv_img_create(lv_scr_act());
+    /*From variable*/
+    lv_img_set_src(icon, &test1_240_240_4);
+  }
+  else
+  {
+    lv_obj_t *icon = lv_img_create(lv_scr_act());
+    /*From variable*/
+
+    lv_img_set_src(icon, &test3);
+  }
+}
+
 void setup()
 {
-  Serial.begin(115200);
+  Serial.begin(115200); /* prepare for possible serial debug */
   AudioToolsLogger.begin(Serial, AudioToolsLogLevel::Info);
-  // Initialize accelerometer
-  if (!lsm6ds3trc.begin_I2C())
-  {
-    Serial.println("Failed to find LSM6DS3TR-C chip");
-    while (1)
-    {
-      delay(10);
-    }
-  }
-  Serial.println("LSM6DS3TR-C Found!");
-  lsm6ds3trc.configInt1(false, false, true); // accelerometer DRDY on INT1
-  lsm6ds3trc.configInt2(false, true, false); // gyro DRDY on INT2
-  // Initialize display
-  lv_init();
-  lv_xiao_disp_init();
-  // lv_xiao_touch_init();
+  String LVGL_Arduino = "Hello Arduino! ";
+  LVGL_Arduino += String('V') + lv_version_major() + "." + lv_version_minor() + "." + lv_version_patch();
 
+  Serial.println(LVGL_Arduino);
+  Serial.println("I am LVGL_Arduinooooooooooo");
+
+  lv_init();
+#if LV_USE_LOG != 0
+  lv_log_register_print_cb(my_print); /* register print function for debugging */
+#endif
+
+  tft.begin();        /* TFT init */
+  tft.setRotation(0); /* Landscape orientation, flipped */
+
+  lv_disp_draw_buf_init(&draw_buf, buf, NULL, screenWidth * screenHeight / 10);
+
+  /*Initialize the display*/
+  static lv_disp_drv_t disp_drv;
+  lv_disp_drv_init(&disp_drv);
+  /*Change the following line to your display resolution*/
+  disp_drv.hor_res = screenWidth;
+  disp_drv.ver_res = screenHeight;
+  disp_drv.flush_cb = my_disp_flush;
+  disp_drv.draw_buf = &draw_buf;
+  lv_disp_drv_register(&disp_drv);
+
+  /* Create simple label */
+  // lv_obj_t *label = lv_label_create( lv_scr_act() );
+  // lv_label_set_text( label, "Hello Ardino and LVGL!");
+  // lv_obj_align( label, LV_ALIGN_CENTER, 0, 0 );
+
+  lv_obj_t *icon = lv_img_create(lv_scr_act());
+  /*From variable*/
+  lv_img_set_src(icon, &test1_240_240_4);
+
+  /* Try an example. See all the examples
+   * online: https://docs.lvgl.io/master/examples.html
+   * source codes: https://github.com/lvgl/lvgl/tree/e7f88efa5853128bf871dde335c0ca8da9eb7731/examples */
+  // lv_example_btn_1();
+
+  const esp_timer_create_args_t lvgl_tick_timer_args = {
+      .callback = &example_increase_lvgl_tick,
+      .name = "lvgl_tick"};
+
+  const esp_timer_create_args_t reboot_timer_args = {
+      .callback = &example_increase_reboot,
+      .name = "reboot"};
+
+  esp_timer_handle_t lvgl_tick_timer = NULL;
+  esp_timer_create(&lvgl_tick_timer_args, &lvgl_tick_timer);
+  esp_timer_start_periodic(lvgl_tick_timer, EXAMPLE_LVGL_TICK_PERIOD_MS * 1000);
+
+  esp_timer_handle_t reboot_timer = NULL;
+  esp_timer_create(&reboot_timer_args, &reboot_timer);
+  esp_timer_start_periodic(reboot_timer, 5000 * 1000);
+
+  /*Or try out a demo. Don't forget to enable the demos in lv_conf.h. E.g. LV_USE_DEMOS_WIDGETS*/
+  // lv_demo_widgets();
+  // lv_demo_benchmark();
+  // lv_demo_keypad_encoder();
+  // lv_demo_music();
+  // lv_demo_printer();
+  // lv_demo_stress();
   // WiFi setup
   WiFi.mode(WIFI_STA);
   IPAddress portalIP(8, 8, 4, 4);
@@ -146,6 +247,8 @@ void setup()
   wifiManager.setConfigPortalTimeout(180);
   wifiManager.setConfigPortalBlocking(false);
   wifiManager.autoConnect("Magic8Ball_AP");
+
+  Serial.println("Setup done");
 
   // Create UI elements
   wifi_label = lv_label_create(lv_scr_act());
@@ -169,62 +272,7 @@ void setup()
 void loop()
 {
   wifiManager.process();
-
-  sensors_event_t accel;
-  sensors_event_t gyro;
-  sensors_event_t temp;
-  lsm6ds3trc.getEvent(&accel, &gyro, &temp);
-
   unsigned long currentTime = millis();
-
-  // Check device state and update display accordingly
-  if (strcmp(currentState, "NORMAL") == 0)
-  {
-    if (checkShaking(accel))
-    {
-      currentState = "SHAKING";
-      isShaking = true;
-      lastShakeTime = currentTime;
-      lv_label_set_text(magic_label, "Shaking");
-      startRecording();
-      lv_timer_handler();
-    }
-  }
-  else if (strcmp(currentState, "SHAKING") == 0)
-  {
-    if (!checkShaking(accel))
-    {
-      if (currentTime - lastShakeTime > 5000)
-      {
-        currentState = "SHOWING_PHRASE";
-        phraseStartTime = currentTime;
-        stopRecording();
-        int responseIndex = random(8);
-        lv_label_set_text(magic_label, responses[responseIndex]);
-      }
-    }
-    else
-    {
-      lastShakeTime = currentTime;
-      // Copy audio data while shaking
-      if (isRecording)
-      {
-        copier.copy();
-      }
-    }
-  }
-  else if (strcmp(currentState, "SHOWING_PHRASE") == 0)
-  {
-    if (currentTime - phraseStartTime > 6000)
-    {
-      currentState = "NORMAL";
-      lv_label_set_text(magic_label, "Magic 8 Ball");
-    }
-  }
-
-  
-  if (strcmp(currentState, "SHAKING") != 0){
-    lv_timer_handler();
-    delay(50);
-  }
+  lv_timer_handler(); /* let the GUI do its work */
+  delay(5);
 }
