@@ -8,7 +8,7 @@
 // Display configuration
 static const uint16_t screenWidth = 240;
 static const uint16_t screenHeight = 240;
-static const uint16_t triangleSize = screenWidth / 3;
+static const uint16_t triangleSize = screenWidth / 2;
 
 // I2S configuration
 const int i2s_bck = 44; // BCLK -> GPIO44 (RX)
@@ -34,7 +34,7 @@ TFT_eSPI tft = TFT_eSPI(screenWidth, screenHeight);
 
 // Triangle object and animation
 lv_obj_t *triangle = nullptr;
-lv_obj_t *wifi_label = nullptr;
+lv_obj_t *triangle_label = nullptr;
 lv_anim_t anim_x;
 lv_anim_t anim_y;
 
@@ -62,13 +62,13 @@ const char *responses[] = {
 static void anim_x_cb(void *var, int32_t v)
 {
   lv_obj_set_x((lv_obj_t *)var, v);
-  lv_obj_align_to(wifi_label, triangle, LV_ALIGN_CENTER, 0, 0);
+  lv_obj_align_to(triangle_label, triangle, LV_ALIGN_CENTER, 0, 0);
 }
 
 static void anim_y_cb(void *var, int32_t v)
 {
   lv_obj_set_y((lv_obj_t *)var, v);
-  lv_obj_align_to(wifi_label, triangle, LV_ALIGN_CENTER, 0, 0);
+  lv_obj_align_to(triangle_label, triangle, LV_ALIGN_CENTER, 0, 0);
 }
 
 static void anim_ready_cb(lv_anim_t *a)
@@ -133,11 +133,11 @@ void updateWiFiStatus(void *parameter)
     if (WiFi.status() == WL_CONNECTED)
     {
       String ip = WiFi.localIP().toString();
-      lv_label_set_text_fmt(wifi_label, "WiFi: Connected\nIP: %s", ip.c_str());
+      lv_label_set_text_fmt(triangle_label, "WiFi: Connected\nIP: %s", ip.c_str());
     }
     else
     {
-      lv_label_set_text(wifi_label, "WiFi: Disconnected");
+      lv_label_set_text(triangle_label, "DISCONNECTED");
     }
     vTaskDelay(pdMS_TO_TICKS(5000));
   }
@@ -190,18 +190,12 @@ void setup()
 
   // Create triangle
   static lv_point_t triangle_points[] = {{triangleSize / 2, 0}, {0, triangleSize}, {triangleSize, triangleSize}};
-  triangle = lv_line_create(lv_scr_act());
-  lv_line_set_points(triangle, triangle_points, 3);
-  lv_obj_set_style_line_color(triangle, lv_color_make(0, 0, 255), LV_PART_MAIN);
-  lv_obj_set_style_line_width(triangle, 2, LV_PART_MAIN);
-  lv_obj_set_style_line_rounded(triangle, true, LV_PART_MAIN);
-
-  // Create WiFi label
-  wifi_label = lv_label_create(triangle);
-  lv_obj_align(wifi_label, LV_ALIGN_CENTER, 0, 0);
-  lv_obj_set_style_text_color(wifi_label, lv_color_white(), LV_PART_MAIN);
-  lv_label_set_text(wifi_label, "WiFi: Disconnected");
-
+  triangle = lv_obj_create(lv_scr_act());
+  lv_obj_set_size(triangle, triangleSize, triangleSize);
+  lv_obj_set_style_radius(triangle, 0, LV_PART_MAIN);
+  lv_obj_set_style_bg_color(triangle, lv_color_make(0, 0, 255), LV_PART_MAIN);
+  lv_obj_set_style_transform_angle(triangle, 450, LV_PART_MAIN);
+  lv_obj_set_style_bg_opa(triangle, LV_OPA_COVER, LV_PART_MAIN);
   // Initialize animations
   lv_anim_init(&anim_x);
   lv_anim_set_exec_cb(&anim_x, anim_x_cb);
