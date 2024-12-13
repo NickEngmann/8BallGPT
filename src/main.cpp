@@ -189,13 +189,19 @@ void setup()
   lv_obj_set_style_bg_color(lv_scr_act(), lv_color_black(), LV_PART_MAIN);
 
   // Create triangle
-  static lv_point_t triangle_points[] = {{triangleSize / 2, 0}, {0, triangleSize}, {triangleSize, triangleSize}};
   triangle = lv_obj_create(lv_scr_act());
   lv_obj_set_size(triangle, triangleSize, triangleSize);
   lv_obj_set_style_radius(triangle, 0, LV_PART_MAIN);
   lv_obj_set_style_bg_color(triangle, lv_color_make(0, 0, 255), LV_PART_MAIN);
   lv_obj_set_style_transform_angle(triangle, 450, LV_PART_MAIN);
   lv_obj_set_style_bg_opa(triangle, LV_OPA_COVER, LV_PART_MAIN);
+
+  // Create WiFi label
+  triangle_label = lv_label_create(lv_scr_act());
+  lv_obj_set_pos(triangle_label, 10, 10);
+  lv_obj_set_style_text_color(triangle_label, lv_color_white(), LV_PART_MAIN);
+  lv_label_set_text(triangle_label, "DISCONNECTED");
+
   // Initialize animations
   lv_anim_init(&anim_x);
   lv_anim_set_exec_cb(&anim_x, anim_x_cb);
