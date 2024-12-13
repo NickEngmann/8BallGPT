@@ -4,6 +4,8 @@
 #include <WiFiManager.h>
 #include <WiFi.h>
 #include "AudioTools.h"
+#include <QMI8658.h>
+#include <DEV_Config.h>
 
 // Display configuration
 static const uint16_t screenWidth = 240;
@@ -45,6 +47,10 @@ unsigned long lastShakeTime = 0;
 unsigned long phraseStartTime = 0;
 const int SHAKE_THRESHOLD = 20;
 const char *currentState = "NORMAL"; // NORMAL, SHAKING, SHOWING_PHRASE
+float acc[3], gyro[3], totalAccel, totalGyro; // Arrays to store accelerometer and gyroscope data
+unsigned int tim_count = 0;          // Timestamp counter
+const float ACCEL_THRESHOLD = 3000.0f; // Threshold for shake detection
+unsigned long lastShakeCheck = 0;       // For rate limiting shake checks
 
 // Magic 8 ball responses
 const char *responses[] = {
@@ -125,6 +131,24 @@ void stopRecording()
   }
 }
 
+bool checkForShake()
+{
+  // Read sensor data
+  QMI8658_read_xyz(acc, gyro, &tim_count);
+
+  // Calculate total acceleration magnitude
+  totalAccel = sqrt((acc[0] * acc[0]) + (acc[1] * acc[1]) + (acc[2] * acc[2]));
+  totalGyro = sqrt((gyro[0] * gyro[0]) + (gyro[1] * gyro[1]) + (gyro[2] * gyro[2]));
+
+  // Check if acceleration exceeds threshold
+  if (totalAccel > ACCEL_THRESHOLD)
+  {
+    return true;
+  }
+
+  return false;
+}
+
 // WiFi status update task
 void updateWiFiStatus(void *parameter)
 {
@@ -161,18 +185,36 @@ void setup()
 {
   Serial.begin(115200);
   AudioToolsLogger.begin(Serial, AudioToolsLogLevel::Info);
-  String LVGL_Arduino = "Hello Arduino! ";
+  String LVGL_Arduino = "Magic 8GPT Ball - LVGL Version-";
   LVGL_Arduino += String('V') + lv_version_major() + "." + lv_version_minor() + "." + lv_version_patch();
+  Serial.println("Initializing DEV_Module...");
+  if (DEV_Module_Init() != 0)
+  {
+    Serial.println("DEV_Module_Init failed!");
+  }
+  else{
+    Serial.println("DEV_Module_Init successs!");
+  }
 
-  Serial.println(LVGL_Arduino);
+  Serial.println("Initializing QMI8658_init...");
+  if (QMI8658_init())
+  {
+    Serial.println("QMI8658 init success!");
+  }
+  else
+  {
+    Serial.println("QMI8658 init failed!");
+  }
 
   // Initialize LVGL
+  Serial.println("Initializing lvgl...");
   lv_init();
-
+  
   // Initialize TFT
+  Serial.println("Initializing tft...");
   tft.begin();
   tft.setRotation(0);
-
+  
   // Initialize display buffer
   lv_disp_draw_buf_init(&draw_buf, buf, NULL, screenWidth * screenHeight / 10);
 
@@ -197,10 +239,15 @@ void setup()
   lv_obj_set_style_bg_opa(triangle, LV_OPA_COVER, LV_PART_MAIN);
 
   // Create WiFi label
-  triangle_label = lv_label_create(lv_scr_act());
-  lv_obj_set_pos(triangle_label, 10, 10);
+  triangle_label = lv_label_create(triangle); // Create label as child of triangle
   lv_obj_set_style_text_color(triangle_label, lv_color_white(), LV_PART_MAIN);
+  lv_obj_set_style_text_align(triangle_label, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
   lv_label_set_text(triangle_label, "DISCONNECTED");
+
+  // Center the label within the triangle
+  lv_obj_align(triangle_label, LV_ALIGN_CENTER, 0, 0);
+  lv_label_set_long_mode(triangle_label, LV_LABEL_LONG_WRAP);
+  lv_obj_set_width(triangle_label, triangleSize - 20); // Set width with some padding
 
   // Initialize animations
   lv_anim_init(&anim_x);
@@ -214,7 +261,7 @@ void setup()
 
   // Start initial animation
   anim_ready_cb(&anim_x);
-
+  Serial.println("initializing WiFi...");
   // WiFi setup
   WiFi.mode(WIFI_STA);
   IPAddress portalIP(8, 8, 4, 4);
@@ -234,11 +281,44 @@ void setup()
       1,
       NULL);
 
-  Serial.println("Setup Done");
+  Serial.println("...Intialization Complete!!");
 }
 
 void loop()
 {
+  // Add shake detection logic
+  unsigned long currentTime = millis();
+  if (currentTime - lastShakeCheck >= 50) // Check every 50ms
+  { 
+    lastShakeCheck = currentTime;
+
+    if (checkForShake() && !isShaking)
+    {
+      isShaking = true;
+      lastShakeTime = currentTime;
+
+      // Change triangle color to indicate shaking
+      lv_obj_set_style_bg_color(triangle, lv_color_make(255, 0, 0), LV_PART_MAIN);
+
+      // Display "Shaking..." text
+      lv_label_set_text(triangle_label, "Shaking...");
+    }
+    else if (isShaking && (currentTime - lastShakeTime > 2000))
+    {
+      // After 2 seconds of shaking, show response
+      isShaking = false;
+
+      // Return triangle to original color
+      lv_obj_set_style_bg_color(triangle, lv_color_make(0, 0, 255), LV_PART_MAIN);
+
+      // Show random response
+      int responseIndex = random(0, sizeof(responses) / sizeof(responses[0]));
+      lv_label_set_text(triangle_label, responses[responseIndex]);
+    }
+    // else {
+    //   Serial.printf("\nAcc: X=%.2f Y=%.2f Z=%.2f | Gyro: X=%.2f Y=%.2f Z=%.2f\n Total Acceleration=%.2f\n Total Gyro=%.2F\n", gyro[0], gyro[1], gyro[2], acc[0], acc[1], acc[2], totalAccel, totalGyro);
+    // }
+  }
   wifiManager.process();
   lv_timer_handler();
   delay(5);
