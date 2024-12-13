@@ -1,14 +1,14 @@
-/*Using LVGL with Arduino requires some extra steps:
- *Be sure to read the docs here: https://docs.lvgl.io/master/get-started/platforms/arduino.html  */
 #include <Arduino.h>
 #include <lvgl.h>
-// #include <SPIFFS.h>
 #include <TFT_eSPI.h>
-#include <lv_conf.h>
 #include <WiFiManager.h>
 #include <WiFi.h>
 #include "AudioTools.h"
-#include <demos/lv_demos.h>
+
+// Display configuration
+static const uint16_t screenWidth = 240;
+static const uint16_t screenHeight = 240;
+static const uint16_t triangleSize = screenWidth / 3;
 
 // I2S configuration
 const int i2s_bck = 44; // BCLK -> GPIO44 (RX)
@@ -24,10 +24,21 @@ CsvOutput<int32_t> csvStream(Serial);
 StreamCopy copier(csvStream, i2sStream);
 AudioInfo info(sample_rate, channels, bits_per_sample);
 
-// Global objects
+// WiFi objects
 WiFiManager wifiManager;
 
-// Global variables
+// Display buffer configuration
+static lv_disp_draw_buf_t draw_buf;
+static lv_color_t buf[screenWidth * screenHeight / 10];
+TFT_eSPI tft = TFT_eSPI(screenWidth, screenHeight);
+
+// Triangle object and animation
+lv_obj_t *triangle = nullptr;
+lv_obj_t *wifi_label = nullptr;
+lv_anim_t anim_x;
+lv_anim_t anim_y;
+
+// State variables
 bool isShaking = false;
 bool isRecording = false;
 unsigned long lastShakeTime = 0;
@@ -47,13 +58,42 @@ const char *responses[] = {
     "Concentrate and ask again"
 };
 
-// UI elements
-lv_obj_t *wifi_label;
-lv_obj_t *magic_label;
+// Animation callbacks
+static void anim_x_cb(void *var, int32_t v)
+{
+  lv_obj_set_x((lv_obj_t *)var, v);
+  lv_obj_align_to(wifi_label, triangle, LV_ALIGN_CENTER, 0, 0);
+}
 
-void startRecording();
-void stopRecording();
-void updateWiFiStatus(void *parameter);
+static void anim_y_cb(void *var, int32_t v)
+{
+  lv_obj_set_y((lv_obj_t *)var, v);
+  lv_obj_align_to(wifi_label, triangle, LV_ALIGN_CENTER, 0, 0);
+}
+
+static void anim_ready_cb(lv_anim_t *a)
+{
+  lv_coord_t x = lv_obj_get_x(triangle);
+  lv_coord_t y = lv_obj_get_y(triangle);
+
+  lv_coord_t new_x = random(0, screenWidth - triangleSize);
+  lv_coord_t new_y = random(0, screenHeight - triangleSize);
+
+  uint32_t duration = sqrt(pow(new_x - x, 2) + pow(new_y - y, 2)) * 5;
+  duration = constrain(duration, 1000, 3000);
+
+  lv_anim_set_var(&anim_x, triangle);
+  lv_anim_set_values(&anim_x, x, new_x);
+  lv_anim_set_time(&anim_x, duration);
+  lv_anim_start(&anim_x);
+
+  lv_anim_set_var(&anim_y, triangle);
+  lv_anim_set_values(&anim_y, y, new_y);
+  lv_anim_set_time(&anim_y, duration);
+  lv_anim_start(&anim_y);
+}
+
+// Audio functions
 void startRecording()
 {
   if (!isRecording)
@@ -85,7 +125,7 @@ void stopRecording()
   }
 }
 
-// Callback for WiFi status updates
+// WiFi status update task
 void updateWiFiStatus(void *parameter)
 {
   for (;;)
@@ -103,35 +143,7 @@ void updateWiFiStatus(void *parameter)
   }
 }
 
-/*To use the built-in examples and demos of LVGL uncomment the includes below respectively.
- *You also need to copy `lvgl/examples` to `lvgl/src/examples`. Similarly for the demos `lvgl/demos` to `lvgl/src/demos`.
- Note that the `lv_examples` library is for LVGL v7 and you shouldn't install it for this version (since LVGL v8)
- as the examples and demos are now part of the main LVGL library. */
-
-#define EXAMPLE_LVGL_TICK_PERIOD_MS 2
-
-/*Change to your screen resolution*/
-static const uint16_t screenWidth = 240;
-static const uint16_t screenHeight = 240;
-
-static lv_disp_draw_buf_t draw_buf;
-static lv_color_t buf[screenWidth * screenHeight / 10];
-
-TFT_eSPI tft = TFT_eSPI(screenWidth, screenHeight); /* TFT instance */
-
-LV_IMG_DECLARE(test1_240_240_4);
-LV_IMG_DECLARE(test2);
-LV_IMG_DECLARE(test3);
-#if LV_USE_LOG != 0
-/* Serial debugging */
-void my_print(const char *buf)
-{
-  Serial.printf(buf);
-  Serial.flush();
-}
-#endif
-
-/* Display flushing */
+// Display flushing
 void my_disp_flush(lv_disp_drv_t *disp_drv, const lv_area_t *area, lv_color_t *color_p)
 {
   uint32_t w = (area->x2 - area->x1 + 1);
@@ -145,99 +157,64 @@ void my_disp_flush(lv_disp_drv_t *disp_drv, const lv_area_t *area, lv_color_t *c
   lv_disp_flush_ready(disp_drv);
 }
 
-void example_increase_lvgl_tick(void *arg)
-{
-  /* Tell LVGL how many milliseconds has elapsed */
-  // lv_tick_inc(EXAMPLE_LVGL_TICK_PERIOD_MS);
-}
-
-static uint8_t count = 0;
-void example_increase_reboot(void *arg)
-{
-  count++;
-  if (count % 2)
-  {
-    // esp_restart();
-    lv_obj_t *icon = lv_img_create(lv_scr_act());
-    /*From variable*/
-    lv_img_set_src(icon, &test1_240_240_4);
-  }
-  else
-  {
-    lv_obj_t *icon = lv_img_create(lv_scr_act());
-    /*From variable*/
-
-    lv_img_set_src(icon, &test3);
-  }
-}
-
 void setup()
 {
-  Serial.begin(115200); /* prepare for possible serial debug */
+  Serial.begin(115200);
   AudioToolsLogger.begin(Serial, AudioToolsLogLevel::Info);
   String LVGL_Arduino = "Hello Arduino! ";
   LVGL_Arduino += String('V') + lv_version_major() + "." + lv_version_minor() + "." + lv_version_patch();
 
   Serial.println(LVGL_Arduino);
-  Serial.println("I am LVGL_Arduinooooooooooo");
 
+  // Initialize LVGL
   lv_init();
-#if LV_USE_LOG != 0
-  lv_log_register_print_cb(my_print); /* register print function for debugging */
-#endif
 
-  tft.begin();        /* TFT init */
-  tft.setRotation(0); /* Landscape orientation, flipped */
+  // Initialize TFT
+  tft.begin();
+  tft.setRotation(0);
 
+  // Initialize display buffer
   lv_disp_draw_buf_init(&draw_buf, buf, NULL, screenWidth * screenHeight / 10);
 
-  /*Initialize the display*/
+  // Initialize display driver
   static lv_disp_drv_t disp_drv;
   lv_disp_drv_init(&disp_drv);
-  /*Change the following line to your display resolution*/
   disp_drv.hor_res = screenWidth;
   disp_drv.ver_res = screenHeight;
   disp_drv.flush_cb = my_disp_flush;
   disp_drv.draw_buf = &draw_buf;
   lv_disp_drv_register(&disp_drv);
 
-  /* Create simple label */
-  // lv_obj_t *label = lv_label_create( lv_scr_act() );
-  // lv_label_set_text( label, "Hello Ardino and LVGL!");
-  // lv_obj_align( label, LV_ALIGN_CENTER, 0, 0 );
+  // Set black background
+  lv_obj_set_style_bg_color(lv_scr_act(), lv_color_black(), LV_PART_MAIN);
 
-  lv_obj_t *icon = lv_img_create(lv_scr_act());
-  /*From variable*/
-  lv_img_set_src(icon, &test1_240_240_4);
+  // Create triangle
+  static lv_point_t triangle_points[] = {{triangleSize / 2, 0}, {0, triangleSize}, {triangleSize, triangleSize}};
+  triangle = lv_line_create(lv_scr_act());
+  lv_line_set_points(triangle, triangle_points, 3);
+  lv_obj_set_style_line_color(triangle, lv_color_make(0, 0, 255), LV_PART_MAIN);
+  lv_obj_set_style_line_width(triangle, 2, LV_PART_MAIN);
+  lv_obj_set_style_line_rounded(triangle, true, LV_PART_MAIN);
 
-  /* Try an example. See all the examples
-   * online: https://docs.lvgl.io/master/examples.html
-   * source codes: https://github.com/lvgl/lvgl/tree/e7f88efa5853128bf871dde335c0ca8da9eb7731/examples */
-  // lv_example_btn_1();
+  // Create WiFi label
+  wifi_label = lv_label_create(triangle);
+  lv_obj_align(wifi_label, LV_ALIGN_CENTER, 0, 0);
+  lv_obj_set_style_text_color(wifi_label, lv_color_white(), LV_PART_MAIN);
+  lv_label_set_text(wifi_label, "WiFi: Disconnected");
 
-  const esp_timer_create_args_t lvgl_tick_timer_args = {
-      .callback = &example_increase_lvgl_tick,
-      .name = "lvgl_tick"};
+  // Initialize animations
+  lv_anim_init(&anim_x);
+  lv_anim_set_exec_cb(&anim_x, anim_x_cb);
+  lv_anim_set_path_cb(&anim_x, lv_anim_path_ease_in_out);
+  lv_anim_set_ready_cb(&anim_x, anim_ready_cb);
 
-  const esp_timer_create_args_t reboot_timer_args = {
-      .callback = &example_increase_reboot,
-      .name = "reboot"};
+  lv_anim_init(&anim_y);
+  lv_anim_set_exec_cb(&anim_y, anim_y_cb);
+  lv_anim_set_path_cb(&anim_y, lv_anim_path_ease_in_out);
 
-  esp_timer_handle_t lvgl_tick_timer = NULL;
-  esp_timer_create(&lvgl_tick_timer_args, &lvgl_tick_timer);
-  esp_timer_start_periodic(lvgl_tick_timer, EXAMPLE_LVGL_TICK_PERIOD_MS * 1000);
+  // Start initial animation
+  anim_ready_cb(&anim_x);
 
-  esp_timer_handle_t reboot_timer = NULL;
-  esp_timer_create(&reboot_timer_args, &reboot_timer);
-  esp_timer_start_periodic(reboot_timer, 5000 * 1000);
-
-  /*Or try out a demo. Don't forget to enable the demos in lv_conf.h. E.g. LV_USE_DEMOS_WIDGETS*/
-  // lv_demo_widgets();
-  // lv_demo_benchmark();
-  // lv_demo_keypad_encoder();
-  // lv_demo_music();
-  // lv_demo_printer();
-  // lv_demo_stress();
   // WiFi setup
   WiFi.mode(WIFI_STA);
   IPAddress portalIP(8, 8, 4, 4);
@@ -246,18 +223,7 @@ void setup()
   wifiManager.setAPStaticIPConfig(portalIP, gateway, subnet);
   wifiManager.setConfigPortalTimeout(180);
   wifiManager.setConfigPortalBlocking(false);
-  wifiManager.autoConnect("Magic8Ball_AP");
-
-  Serial.println("Setup done");
-
-  // Create UI elements
-  wifi_label = lv_label_create(lv_scr_act());
-  lv_obj_set_pos(wifi_label, 10, 10);
-  lv_label_set_text(wifi_label, "WiFi: Disconnected");
-
-  magic_label = lv_label_create(lv_scr_act());
-  lv_obj_align(magic_label, LV_ALIGN_CENTER, 0, 0);
-  lv_label_set_text(magic_label, "Magic 8 Ball");
+  wifiManager.autoConnect("MagicGPT8Ball");
 
   // Start WiFi monitoring task
   xTaskCreate(
@@ -267,12 +233,13 @@ void setup()
       NULL,
       1,
       NULL);
+
+  Serial.println("Setup Done");
 }
 
 void loop()
 {
   wifiManager.process();
-  unsigned long currentTime = millis();
-  lv_timer_handler(); /* let the GUI do its work */
+  lv_timer_handler();
   delay(5);
 }
