@@ -216,8 +216,6 @@ Info:
 ******************************************************************************/
 uint8_t DEV_Module_Init(void)
 {
-    // Serial.begin(115200);
-    // DEV_Delay_ms(100);
     // GPIO Config
     DEV_GPIO_Init();
     // SPI Config
