@@ -66,8 +66,6 @@ The Magic (GPT)8 Ball is an interactive project that simulates the classic Magic
 4. Use the ChatGPT integration for dynamic responses.
 
 ## To-Do List
-
-- [ ] Move the animation depending on the gyroscope
 - [ ] PDM Microphone working
 - [ ] ChatGPT integration
 - [ ] Decrease the text size by 10% or make it dynamic
