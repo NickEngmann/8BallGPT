@@ -41,11 +41,20 @@ lv_anim_t anim_x;
 lv_anim_t anim_y;
 
 // State variables
+static lv_coord_t current_x = 0;
+static lv_coord_t current_y = 0;
+static lv_coord_t target_x = 0;
+static lv_coord_t target_y = 0;
+const float GYRO_SENSITIVITY = 0.5f;
+
 bool isShaking = false;
+bool isTransitioningToCenter = false;
 bool isRecording = false;
 unsigned long lastShakeTime = 0;
 unsigned long phraseStartTime = 0;
+unsigned long responseDisplayStart = 0;
 const int SHAKE_THRESHOLD = 20;
+const int RESPONSE_DISPLAY_DURATION = 3000; // How long to show response in center
 const char *currentState = "NORMAL"; // NORMAL, SHAKING, SHOWING_PHRASE
 float acc[3], gyro[3], totalAccel, totalGyro; // Arrays to store accelerometer and gyroscope data
 unsigned int tim_count = 0;          // Timestamp counter
@@ -61,42 +70,81 @@ const char *responses[] = {
     "My reply is no",
     "Outlook not so good",
     "Very doubtful",
-    "Concentrate and ask again"
-};
+    "Concentrate and ask again"};
 
-// Animation callbacks
+// Animation callbacks for transitioning to center
 static void anim_x_cb(void *var, int32_t v)
 {
+  current_x = v;
   lv_obj_set_x((lv_obj_t *)var, v);
   lv_obj_align_to(triangle_label, triangle, LV_ALIGN_CENTER, 0, 0);
 }
 
 static void anim_y_cb(void *var, int32_t v)
 {
+  current_y = v;
   lv_obj_set_y((lv_obj_t *)var, v);
   lv_obj_align_to(triangle_label, triangle, LV_ALIGN_CENTER, 0, 0);
 }
 
 static void anim_ready_cb(lv_anim_t *a)
 {
-  lv_coord_t x = lv_obj_get_x(triangle);
-  lv_coord_t y = lv_obj_get_y(triangle);
+  isTransitioningToCenter = false;
+}
 
-  lv_coord_t new_x = random(0, screenWidth - triangleSize);
-  lv_coord_t new_y = random(0, screenHeight - triangleSize);
+void moveToCenter()
+{
+  if (!isTransitioningToCenter)
+  {
+    isTransitioningToCenter = true;
+    // Calculate center position
+    target_x = (screenWidth - triangleSize) / 2;
+    target_y = (screenHeight - triangleSize) / 2;
 
-  uint32_t duration = sqrt(pow(new_x - x, 2) + pow(new_y - y, 2)) * 5;
-  duration = constrain(duration, 1000, 3000);
+    // Set up X animation
+    lv_anim_set_var(&anim_x, triangle);
+    lv_anim_set_values(&anim_x, current_x, target_x);
+    lv_anim_set_time(&anim_x, 500); // 500ms duration
+    lv_anim_set_exec_cb(&anim_x, anim_x_cb);
+    lv_anim_set_path_cb(&anim_x, lv_anim_path_ease_out);
+    lv_anim_start(&anim_x);
 
-  lv_anim_set_var(&anim_x, triangle);
-  lv_anim_set_values(&anim_x, x, new_x);
-  lv_anim_set_time(&anim_x, duration);
-  lv_anim_start(&anim_x);
+    // Set up Y animation
+    lv_anim_set_var(&anim_y, triangle);
+    lv_anim_set_values(&anim_y, current_y, target_y);
+    lv_anim_set_time(&anim_y, 500); // 500ms duration
+    lv_anim_set_exec_cb(&anim_y, anim_y_cb);
+    lv_anim_set_path_cb(&anim_y, lv_anim_path_ease_out);
+    lv_anim_set_ready_cb(&anim_y, anim_ready_cb);
+    lv_anim_start(&anim_y);
+  }
+}
 
-  lv_anim_set_var(&anim_y, triangle);
-  lv_anim_set_values(&anim_y, y, new_y);
-  lv_anim_set_time(&anim_y, duration);
-  lv_anim_start(&anim_y);
+// Update position based on gyroscope data
+void updateTrianglePosition()
+{
+  if (!triangle || isShaking || isTransitioningToCenter)
+    return;
+
+  // Read sensor data
+  QMI8658_read_xyz(acc, gyro, &tim_count);
+  // Calculate new position based on gyro data
+  current_x += gyro[1] * GYRO_SENSITIVITY;
+  current_y += gyro[0] * GYRO_SENSITIVITY;
+  // Keep the triangle within screen bounds
+  current_x = constrain(current_x, 0, screenWidth - triangleSize);
+  current_y = constrain(current_y, 0, screenHeight - triangleSize);
+  // Update triangle position
+  lv_obj_set_pos(triangle, current_x, current_y);
+  lv_obj_align_to(triangle_label, triangle, LV_ALIGN_CENTER, 0, 0);
+}
+
+void initTrianglePosition()
+{
+  current_x = (screenWidth - triangleSize) / 2;
+  current_y = (screenHeight - triangleSize) / 2;
+  lv_obj_set_pos(triangle, current_x, current_y);
+  lv_obj_align_to(triangle_label, triangle, LV_ALIGN_CENTER, 0, 0);
 }
 
 // Audio functions
@@ -105,7 +153,6 @@ void startRecording()
   if (!isRecording)
   {
     Serial.println("Starting audio recording...");
-
     auto config = i2sStream.defaultConfig(RX_MODE);
     config.copyFrom(info);
     config.signal_type = PDM;
@@ -113,7 +160,6 @@ void startRecording()
     config.pin_bck = i2s_bck;
     config.pin_ws = i2s_ws;
     config.pin_data = i2s_data;
-
     i2sStream.begin(config);
     csvStream.begin(info);
     isRecording = true;
@@ -133,20 +179,10 @@ void stopRecording()
 
 bool checkForShake()
 {
-  // Read sensor data
   QMI8658_read_xyz(acc, gyro, &tim_count);
-
-  // Calculate total acceleration magnitude
   totalAccel = sqrt((acc[0] * acc[0]) + (acc[1] * acc[1]) + (acc[2] * acc[2]));
   totalGyro = sqrt((gyro[0] * gyro[0]) + (gyro[1] * gyro[1]) + (gyro[2] * gyro[2]));
-
-  // Check if acceleration exceeds threshold
-  if (totalAccel > ACCEL_THRESHOLD)
-  {
-    return true;
-  }
-
-  return false;
+  return (totalAccel > ACCEL_THRESHOLD);
 }
 
 // WiFi status update task
@@ -172,12 +208,10 @@ void my_disp_flush(lv_disp_drv_t *disp_drv, const lv_area_t *area, lv_color_t *c
 {
   uint32_t w = (area->x2 - area->x1 + 1);
   uint32_t h = (area->y2 - area->y1 + 1);
-
   tft.startWrite();
   tft.setAddrWindow(area->x1, area->y1, w, h);
   tft.pushColors((uint16_t *)&color_p->full, w * h, true);
   tft.endWrite();
-
   lv_disp_flush_ready(disp_drv);
 }
 
@@ -185,9 +219,6 @@ void setup()
 {
   Serial.begin(115200);
   AudioToolsLogger.begin(Serial, AudioToolsLogLevel::Info);
-  String LVGL_Arduino = "Magic 8GPT Ball - LVGL Version-";
-  LVGL_Arduino += String('V') + lv_version_major() + "." + lv_version_minor() + "." + lv_version_patch();
-  Serial.println("Initializing DEV_Module...");
   if (DEV_Module_Init() != 0)
   {
     Serial.println("DEV_Module_Init failed!");
@@ -207,14 +238,9 @@ void setup()
   }
 
   // Initialize LVGL
-  Serial.println("Initializing lvgl...");
   lv_init();
-  
-  // Initialize TFT
-  Serial.println("Initializing tft...");
   tft.begin();
   tft.setRotation(0);
-  
   // Initialize display buffer
   lv_disp_draw_buf_init(&draw_buf, buf, NULL, screenWidth * screenHeight / 10);
 
@@ -239,29 +265,20 @@ void setup()
   lv_obj_set_style_bg_opa(triangle, LV_OPA_COVER, LV_PART_MAIN);
 
   // Create WiFi label
-  triangle_label = lv_label_create(triangle); // Create label as child of triangle
+  triangle_label = lv_label_create(triangle);
   lv_obj_set_style_text_color(triangle_label, lv_color_white(), LV_PART_MAIN);
   lv_obj_set_style_text_align(triangle_label, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
   lv_label_set_text(triangle_label, "DISCONNECTED");
-
-  // Center the label within the triangle
   lv_obj_align(triangle_label, LV_ALIGN_CENTER, 0, 0);
   lv_label_set_long_mode(triangle_label, LV_LABEL_LONG_WRAP);
-  lv_obj_set_width(triangle_label, triangleSize - 20); // Set width with some padding
+  lv_obj_set_width(triangle_label, triangleSize - 20);
 
   // Initialize animations
   lv_anim_init(&anim_x);
-  lv_anim_set_exec_cb(&anim_x, anim_x_cb);
-  lv_anim_set_path_cb(&anim_x, lv_anim_path_ease_in_out);
-  lv_anim_set_ready_cb(&anim_x, anim_ready_cb);
-
   lv_anim_init(&anim_y);
-  lv_anim_set_exec_cb(&anim_y, anim_y_cb);
-  lv_anim_set_path_cb(&anim_y, lv_anim_path_ease_in_out);
+  // Initialize triangle position
+  initTrianglePosition();
 
-  // Start initial animation
-  anim_ready_cb(&anim_x);
-  Serial.println("initializing WiFi...");
   // WiFi setup
   WiFi.mode(WIFI_STA);
   IPAddress portalIP(8, 8, 4, 4);
@@ -280,44 +297,50 @@ void setup()
       NULL,
       1,
       NULL);
-
   Serial.println("...Intialization Complete!!");
 }
 
 void loop()
 {
-  // Add shake detection logic
   unsigned long currentTime = millis();
-  if (currentTime - lastShakeCheck >= 50) // Check every 50ms
-  { 
+  if (currentTime - lastShakeCheck >= 50)
+  {
     lastShakeCheck = currentTime;
 
     if (checkForShake() && !isShaking)
     {
       isShaking = true;
       lastShakeTime = currentTime;
+      responseDisplayStart = 0;
 
-      // Change triangle color to indicate shaking
+      // Change triangle color and move to center
       lv_obj_set_style_bg_color(triangle, lv_color_make(255, 0, 0), LV_PART_MAIN);
-
-      // Display "Shaking..." text
       lv_label_set_text(triangle_label, "Shaking...");
+      moveToCenter();
     }
     else if (isShaking && (currentTime - lastShakeTime > 2000))
     {
       // After 2 seconds of shaking, show response
-      isShaking = false;
+      if (responseDisplayStart == 0)
+      {
+        responseDisplayStart = currentTime;
+        int responseIndex = random(0, sizeof(responses) / sizeof(responses[0]));
+        lv_obj_set_style_bg_color(triangle, lv_color_make(0, 0, 255), LV_PART_MAIN);
+        lv_label_set_text(triangle_label, responses[responseIndex]);
+      }
 
-      // Return triangle to original color
-      lv_obj_set_style_bg_color(triangle, lv_color_make(0, 0, 255), LV_PART_MAIN);
-
-      // Show random response
-      int responseIndex = random(0, sizeof(responses) / sizeof(responses[0]));
-      lv_label_set_text(triangle_label, responses[responseIndex]);
+      // Keep centered for RESPONSE_DISPLAY_DURATION
+      if (currentTime - responseDisplayStart >= RESPONSE_DISPLAY_DURATION)
+      {
+        isShaking = false;
+      }
     }
-    // else {
-    //   Serial.printf("\nAcc: X=%.2f Y=%.2f Z=%.2f | Gyro: X=%.2f Y=%.2f Z=%.2f\n Total Acceleration=%.2f\n Total Gyro=%.2F\n", gyro[0], gyro[1], gyro[2], acc[0], acc[1], acc[2], totalAccel, totalGyro);
-    // }
+
+    // Update position based on gyroscope if not shaking or transitioning
+    if (!isShaking && !isTransitioningToCenter)
+    {
+      updateTrianglePosition();
+    }
   }
   wifiManager.process();
   lv_timer_handler();
