@@ -1,5 +1,4 @@
 # Magic (GPT)8 Ball
-
 🎱
 
 ## Overview
@@ -11,15 +10,15 @@ The Magic (GPT)8 Ball is an interactive project that simulates the classic Magic
 - Shake detection using accelerometer and gyroscope
 - Display responses on a screen
 - Integration with ChatGPT for dynamic responses
-- Analog microphone input using Electret Microphone Amplifier - MAX9814
+- PDM microphone input
+- Vibrational feedback
 
 ## Hardware Requirements
 
-- ESP32 microcontroller
-- Accelerometer and gyroscope sensor (e.g., LSM6DS3TR-C)
-- Display (e.g., TFT LCD)
-- Electret Microphone Amplifier - MAX9814
-- Other necessary components (e.g., resistors, capacitors, wires)
+- ESP32S3 Waveshare 1.28 LCD Display + Microcontroller
+- Adafruit PDM Microphone Breakout - SPH0645LM4H
+- Other necessary components (e.g., wires)
+- Vibration Mini Motor Disk
 
 ## Software Requirements
 
@@ -31,22 +30,20 @@ The Magic (GPT)8 Ball is an interactive project that simulates the classic Magic
 ## Getting Started
 
 ### Hardware Setup
-
-1. Connect the accelerometer and gyroscope sensor to the ESP32.
-2. Connect the display to the ESP32.
-3. Connect the Electret Microphone Amplifier - MAX9814 to the ESP32 analog input pin.
-4. Ensure all connections are secure and powered correctly.
+1. Connect the PDM to the ESP32 analog input pins
+2. Connect the Vibrational Motor Disks to the Correct GPIO pins.
+3. Ensure all connections are secure and powered correctly.
 
 ### Software Setup
 
 1. Clone the repository:
 
    ```sh
-   git clone <repository-url>
-   cd <repository-directory>
+   git clone github.com/NickEngmann/MagicGPT8Ball.git
+   cd MagicGPT8Ball
     ```
 
-2. Open the project in PlatformIO IDE.
+2. Open the project in PlatformIO IDE. (Visual Studio Code with PlatformIO extension)
 3. Install the necessary libraries:
 
 `pio lib install`
@@ -67,8 +64,10 @@ The Magic (GPT)8 Ball is an interactive project that simulates the classic Magic
 
 ## To-Do List
 - [ ] PDM Microphone working
-- [ ] ChatGPT integration
-- [ ] Decrease the text size by 10% or make it dynamic
+- [ ] ChatGPT integration for responses
+- [ ] Clean Up Displayed Text
+- [ ] Better Animations (Nice to have)
+- [ ] Vibrational Feedback (Nice to have)
 
 ## Contributing
 
@@ -91,4 +90,3 @@ LICENSE
 
 - [LVGL](https://lvgl.io/) for the display library
 - [PlatformIO](https://platformio.org/) for the development environment
-```
