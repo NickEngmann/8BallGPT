@@ -67,6 +67,16 @@ void setup()
 {
   Serial.begin(115200);
   AudioToolsLogger.begin(Serial, AudioToolsLogLevel::Info);
+
+  if (psramInit())
+  {
+    Serial.printf("PSRAM initialized. Size: %d MB\n", ESP.getPsramSize() / 1024 / 1024);
+    Serial.printf("Free PSRAM: %d KB\n", ESP.getFreePsram() / 1024);
+  }
+  else
+  {
+    Serial.println("PSRAM initialization failed!");
+  }
   // Initialize hardware
   if (DEV_Module_Init() != 0)
   {
