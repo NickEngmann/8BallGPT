@@ -6,25 +6,13 @@
 #include "AudioTools.h"
 #include <QMI8658.h>
 #include <DEV_Config.h>
+#include "Recorder.h"
 
+VoiceActivatedRecorder recorder;
 // Display configuration
 static const uint16_t screenWidth = 240;
 static const uint16_t screenHeight = 240;
 static const uint16_t triangleSize = screenWidth / 2;
-
-// I2S configuration
-const int i2s_bck = 44; // BCLK -> GPIO44 (RX)
-const int i2s_ws = -1;  // not
-const int i2s_data = 3; // DOUT -> GPIO3 (A2)
-const int sample_rate = 44100;
-const int channels = 2;
-const int bits_per_sample = 16;
-
-// Audio objects
-I2SStream i2sStream;
-CsvOutput<int32_t> csvStream(Serial);
-StreamCopy copier(csvStream, i2sStream);
-AudioInfo info(sample_rate, channels, bits_per_sample);
 
 // WiFi objects
 WiFiManager wifiManager;
@@ -46,13 +34,9 @@ static lv_coord_t current_y = 0;
 
 bool isShaking = false;
 bool isTransitioningToCenter = false;
-bool isRecording = false;
 unsigned long lastShakeTime = 0;
-unsigned long phraseStartTime = 0;
 unsigned long responseDisplayStart = 0;
-const int SHAKE_THRESHOLD = 20;
 const int RESPONSE_DISPLAY_DURATION = 3000; // How long to show response in center
-const char *currentState = "NORMAL"; // NORMAL, SHAKING, SHOWING_PHRASE
 float acc[3], gyro[3], totalAccel, totalGyro; // Arrays to store accelerometer and gyroscope data
 unsigned int tim_count = 0;          // Timestamp counter
 const float ACCEL_THRESHOLD = 3000.0f; // Threshold for shake detection
@@ -202,36 +186,6 @@ void initTrianglePosition()
   lv_obj_align_to(triangle_label, triangle, LV_ALIGN_CENTER, 0, 0);
 }
 
-// Audio functions
-void startRecording()
-{
-  if (!isRecording)
-  {
-    Serial.println("Starting audio recording...");
-    auto config = i2sStream.defaultConfig(RX_MODE);
-    config.copyFrom(info);
-    config.signal_type = PDM;
-    config.use_apll = false;
-    config.pin_bck = i2s_bck;
-    config.pin_ws = i2s_ws;
-    config.pin_data = i2s_data;
-    i2sStream.begin(config);
-    csvStream.begin(info);
-    isRecording = true;
-  }
-}
-
-void stopRecording()
-{
-  if (isRecording)
-  {
-    Serial.println("Stopping audio recording...");
-    i2sStream.end();
-    csvStream.end();
-    isRecording = false;
-  }
-}
-
 bool checkForShake()
 {
   QMI8658_read_xyz(acc, gyro, &tim_count);
@@ -352,6 +306,12 @@ void setup()
       NULL,
       1,
       NULL);
+
+  if (!recorder.begin())
+  {
+    Serial.println("Failed to initialize audio recorder!");
+
+  }
   Serial.println("...Intialization Complete!!");
 }
 
@@ -369,9 +329,11 @@ void loop()
       lastShakeTime = currentTime;
       responseDisplayStart = 0;
 
+      // Start recording when shake is detected
       lv_obj_set_style_bg_color(triangle, lv_color_make(255, 0, 0), LV_PART_MAIN);
-      lv_label_set_text(triangle_label, "Shaking...");
+      lv_label_set_text(triangle_label, "Speak...");
       moveToCenter();
+      recorder.startRecording();
     }
     else if (isShaking && (currentTime - lastShakeTime > 2000))
     {
@@ -400,5 +362,25 @@ void loop()
 
   wifiManager.process();
   lv_timer_handler();
-  delay(3); // Slightly reduced delay for smoother motion
+  if (recorder.isRecording())
+  {
+    recorder.update();
+
+    // If recording stops (due to silence or max time), process the audio
+    if (!recorder.isRecording())
+    {
+      // Get the recorded audio
+      uint8_t *wavData = recorder.getBuffer();
+      size_t wavSize = recorder.getBufferSize();
+
+      // async send audio to your OpenAI Whispers API if connected to WiFi
+      // sendToAIService(wavData, wavSize);
+
+      // Update the display
+      lv_label_set_text(triangle_label, "Processing");
+    }
+  }
+  else{
+    delay(3); // Slightly reduced delay for smoother motion
+  }
 }
