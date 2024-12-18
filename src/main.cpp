@@ -43,9 +43,6 @@ lv_anim_t anim_y;
 // State variables
 static lv_coord_t current_x = 0;
 static lv_coord_t current_y = 0;
-static lv_coord_t target_x = 0;
-static lv_coord_t target_y = 0;
-const float GYRO_SENSITIVITY = 0.5f;
 
 bool isShaking = false;
 bool isTransitioningToCenter = false;
@@ -91,20 +88,51 @@ static void anim_ready_cb(lv_anim_t *a)
 {
   isTransitioningToCenter = false;
 }
+const float MOTION_SMOOTHING = 0.95f; // Higher = smoother (0.0 to 1.0)
+const float GYRO_SENSITIVITY = 0.08f; // Reduced from 0.5f for gentler motion
+const float IDLE_AMPLITUDE = 15.0f;   // Maximum idle movement in pixels
+const float IDLE_SPEED = 0.001f;      // Speed of idle animation
+const float SCREEN_MARGIN = 0.75f;    // How much of triangle can go off screen (0.0 to 1.0)
+
+// Motion state variables
+static float velocity_x = 0.0f;
+static float velocity_y = 0.0f;
+static float target_x = 0.0f;
+static float target_y = 0.0f;
+static float idle_time = 0.0f;
+
+// Add these new functions for motion control:
+
+void updateIdleMotion()
+{
+  // Create a smooth, water-like motion using sine waves
+  idle_time += IDLE_SPEED;
+
+  float offset_x = sin(idle_time) * cos(idle_time * 0.7f) * IDLE_AMPLITUDE;
+  float offset_y = cos(idle_time * 1.3f) * sin(idle_time * 0.5f) * IDLE_AMPLITUDE;
+
+  target_x += offset_x * 0.01f; // Small influence from idle motion
+  target_y += offset_y * 0.01f;
+}
 
 void moveToCenter()
 {
   if (!isTransitioningToCenter)
   {
     isTransitioningToCenter = true;
-    // Calculate center position
+
+    // Calculate position in bottom third of screen
     target_x = (screenWidth - triangleSize) / 2;
-    target_y = (screenHeight - triangleSize) / 2;
+    target_y = (screenHeight * 2 / 3) - (triangleSize / 2); // Position in bottom third
+
+    // Reset velocities
+    velocity_x = 0;
+    velocity_y = 0;
 
     // Set up X animation
     lv_anim_set_var(&anim_x, triangle);
     lv_anim_set_values(&anim_x, current_x, target_x);
-    lv_anim_set_time(&anim_x, 500); // 500ms duration
+    lv_anim_set_time(&anim_x, 800); // Slower animation
     lv_anim_set_exec_cb(&anim_x, anim_x_cb);
     lv_anim_set_path_cb(&anim_x, lv_anim_path_ease_out);
     lv_anim_start(&anim_x);
@@ -112,7 +140,7 @@ void moveToCenter()
     // Set up Y animation
     lv_anim_set_var(&anim_y, triangle);
     lv_anim_set_values(&anim_y, current_y, target_y);
-    lv_anim_set_time(&anim_y, 500); // 500ms duration
+    lv_anim_set_time(&anim_y, 800); // Slower animation
     lv_anim_set_exec_cb(&anim_y, anim_y_cb);
     lv_anim_set_path_cb(&anim_y, lv_anim_path_ease_out);
     lv_anim_set_ready_cb(&anim_y, anim_ready_cb);
@@ -126,16 +154,43 @@ void updateTrianglePosition()
   if (!triangle || isShaking || isTransitioningToCenter)
     return;
 
-  // Read sensor data
   QMI8658_read_xyz(acc, gyro, &tim_count);
-  // Calculate new position based on gyro data
-  current_x += gyro[1] * GYRO_SENSITIVITY;
-  current_y += gyro[0] * GYRO_SENSITIVITY;
-  // Keep the triangle within screen bounds
-  current_x = constrain(current_x, 0, screenWidth - triangleSize);
-  current_y = constrain(current_y, 0, screenHeight - triangleSize);
+
+  // Detect if device is relatively still
+  bool is_still = abs(gyro[0]) < 0.5f && abs(gyro[1]) < 0.5f;
+
+  if (is_still)
+  {
+    updateIdleMotion();
+  }
+  else
+  {
+    // Update target position based on gyro with reduced sensitivity
+    target_x += gyro[1] * GYRO_SENSITIVITY;
+    target_y += gyro[0] * GYRO_SENSITIVITY;
+  }
+
+  // Calculate screen boundaries with margins
+  float margin_x = triangleSize * (1.0f - SCREEN_MARGIN);
+  float margin_y = triangleSize * (1.0f - SCREEN_MARGIN);
+
+  // Constrain target positions
+  target_x = constrain(target_x, -margin_x, screenWidth - triangleSize + margin_x);
+  target_y = constrain(target_y, -margin_y, screenHeight - triangleSize + margin_y);
+
+  // Smooth velocity changes
+  float dx = target_x - current_x;
+  float dy = target_y - current_y;
+
+  velocity_x = velocity_x * MOTION_SMOOTHING + dx * (1.0f - MOTION_SMOOTHING);
+  velocity_y = velocity_y * MOTION_SMOOTHING + dy * (1.0f - MOTION_SMOOTHING);
+
+  // Update position with velocity
+  current_x += velocity_x * 0.1f; // Further smooth the motion
+  current_y += velocity_y * 0.1f;
+
   // Update triangle position
-  lv_obj_set_pos(triangle, current_x, current_y);
+  lv_obj_set_pos(triangle, (int16_t)current_x, (int16_t)current_y);
   lv_obj_align_to(triangle_label, triangle, LV_ALIGN_CENTER, 0, 0);
 }
 
@@ -303,8 +358,9 @@ void setup()
 void loop()
 {
   unsigned long currentTime = millis();
-  if (currentTime - lastShakeCheck >= 50)
-  {
+
+  if (currentTime - lastShakeCheck >= 16)
+  { // ~60fps update rate
     lastShakeCheck = currentTime;
 
     if (checkForShake() && !isShaking)
@@ -313,14 +369,12 @@ void loop()
       lastShakeTime = currentTime;
       responseDisplayStart = 0;
 
-      // Change triangle color and move to center
       lv_obj_set_style_bg_color(triangle, lv_color_make(255, 0, 0), LV_PART_MAIN);
       lv_label_set_text(triangle_label, "Shaking...");
       moveToCenter();
     }
     else if (isShaking && (currentTime - lastShakeTime > 2000))
     {
-      // After 2 seconds of shaking, show response
       if (responseDisplayStart == 0)
       {
         responseDisplayStart = currentTime;
@@ -329,20 +383,22 @@ void loop()
         lv_label_set_text(triangle_label, responses[responseIndex]);
       }
 
-      // Keep centered for RESPONSE_DISPLAY_DURATION
       if (currentTime - responseDisplayStart >= RESPONSE_DISPLAY_DURATION)
       {
         isShaking = false;
+        // Reset velocities when returning to normal motion
+        velocity_x = 0;
+        velocity_y = 0;
       }
     }
 
-    // Update position based on gyroscope if not shaking or transitioning
     if (!isShaking && !isTransitioningToCenter)
     {
       updateTrianglePosition();
     }
   }
+
   wifiManager.process();
   lv_timer_handler();
-  delay(5);
+  delay(3); // Slightly reduced delay for smoother motion
 }
