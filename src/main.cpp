@@ -1,7 +1,6 @@
 #include <Arduino.h>
 #include <WiFiManager.h>
 #include <WiFi.h>
-#include "AudioTools.h"
 #include <QMI8658.h>
 #include <DEV_Config.h>
 #include "Recorder.h"
@@ -22,7 +21,7 @@ unsigned long lastShakeTime = 0;
 unsigned long responseDisplayStart = 0;
 float acc[3], gyro[3], totalAccel, totalGyro;
 unsigned int tim_count = 0;
-const float ACCEL_THRESHOLD = 3000.0f;
+const float ACCEL_THRESHOLD = 2000.0f;
 unsigned long lastShakeCheck = 0;
 const int RESPONSE_DISPLAY_DURATION = 3000;
 
@@ -66,7 +65,6 @@ void updateWiFiStatus(void *parameter)
 void setup()
 {
   Serial.begin(115200);
-  AudioToolsLogger.begin(Serial, AudioToolsLogLevel::Info);
 
   if (psramInit())
   {
@@ -77,6 +75,7 @@ void setup()
   {
     Serial.println("PSRAM initialization failed!");
   }
+
   // Initialize hardware
   if (DEV_Module_Init() != 0)
   {
@@ -130,6 +129,13 @@ void setup()
   {
     Serial.println("Failed to initialize audio recorder!");
   }
+  else
+  {
+    Serial.println("Audio recorder initialized successfully");
+  }
+
+  // Random seed for responses
+  randomSeed(analogRead(2));
 
   Serial.println("Initialization Complete!");
 }
@@ -138,33 +144,51 @@ void loop()
 {
   unsigned long currentTime = millis();
 
+  // Check for shake approximately every 16ms (60Hz)
   if (currentTime - lastShakeCheck >= 16)
-  { // ~60fps update rate
+  {
     lastShakeCheck = currentTime;
 
     if (checkForShake() && !isShaking)
     {
+      // Start new recording session
       isShaking = true;
       lastShakeTime = currentTime;
       responseDisplayStart = 0;
 
-      // Start recording when shake is detected
-      animations.setTriangleColor(255, 0, 0); // Red
-      animations.setLabelText("Speak...");
+      animations.setTriangleColor(255, 0, 0); // Red for recording
+      animations.setLabelText("Speak now...");
       animations.moveToCenter();
       animations.setShaking(true);
-      recorder.startRecording();
+
+      // Start the voice recording
+      if (recorder.startRecording())
+      {
+        Serial.println("Recording started");
+      }
+      else
+      {
+        Serial.println("Failed to start recording");
+      }
     }
     else if (isShaking && (currentTime - lastShakeTime > 2000))
     {
+      // Handle response display
       if (responseDisplayStart == 0)
       {
         responseDisplayStart = currentTime;
         int responseIndex = random(0, sizeof(responses) / sizeof(responses[0]));
-        animations.setTriangleColor(0, 0, 255); // Blue
+        animations.setTriangleColor(0, 0, 255); // Blue for response
         animations.setLabelText(responses[responseIndex]);
+
+        // Stop recording if still active
+        if (recorder.isRecording())
+        {
+          recorder.stopRecording();
+        }
       }
 
+      // Reset state after displaying response
       if (currentTime - responseDisplayStart >= RESPONSE_DISPLAY_DURATION)
       {
         isShaking = false;
@@ -172,6 +196,7 @@ void loop()
       }
     }
 
+    // Update triangle position when not shaking or transitioning
     if (!isShaking && !animations.isTransitioning())
     {
       QMI8658_read_xyz(acc, gyro, &tim_count);
@@ -179,28 +204,30 @@ void loop()
     }
   }
 
-  // Handle WiFi
+  // Handle ongoing processes
   wifiManager.process();
-  // Update LVGL
   lv_timer_handler();
+
   // Handle audio recording
   if (recorder.isRecording())
   {
     recorder.update();
 
-    // If recording stops, process the audio
+    // Check if recording just finished
     if (!recorder.isRecording())
     {
       uint8_t *wavData = recorder.getBuffer();
       size_t wavSize = recorder.getBufferSize();
 
-      // Send to AI service if connected to WiFi
+      Serial.printf("Recording finished. Captured %d bytes\n", wavSize);
+
+      // Here you would process the audio or send it to your AI service
       // sendToAIService(wavData, wavSize);
-      animations.setLabelText("Processing");
+      animations.setLabelText("Processing...");
+      delay(1000);
     }
   }
-  else
-  {
-    delay(3); // Slight delay for smoother motion when not recording
-  }
+
+  // Small delay to prevent busy-waiting
+  delay(3);
 }
