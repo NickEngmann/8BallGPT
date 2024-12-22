@@ -7,12 +7,10 @@
 #include <esp_system.h>
 #include <algorithm>
 
-// Debug macro
-#define DEBUG_PRINT(x) Serial.println(x)
-#define DEBUG_PRINTF(format, ...) Serial.printf((format), ##__VA_ARGS__)
+#define ENABLE_DEBUG
 
 // Audio configurations
-#define SAMPLE_RATE 16000    
+#define SAMPLE_RATE 32000    
 #define CHANNELS 1           // Mono
 #define BITS_PER_SAMPLE 16   // Use 16-bit samples in WAV file
 #define DC_OFFSET 1250       // 1.25V DC bias from MAX9814
@@ -29,7 +27,7 @@
 #define ADC_MIC_UNIT ADC_UNIT_1        // ADC 1
 #define SAMPLE_BUFFER_SIZE 256         // Size of temporary sample buffer
 #define DEBUG_INTERVAL 500
-
+#define MAX9814_VPP 2000 // MAX9814 peak-to-peak voltage
 // Calculate total buffer size for the entire recording
 #define BUFFER_SIZE (MAX_RECORD_SECONDS * SAMPLE_RATE * CHANNELS * 2) // *2 for 16-bit WAV samples
 

@@ -8,6 +8,8 @@
 #include "Animations.h"
 #include <algorithm>
 #include <ArduinoJson.h>
+#include "TextStateManager.h"
+
 // Display configuration
 static const uint16_t screenWidth = 240;
 static const uint16_t screenHeight = 240;
@@ -16,6 +18,7 @@ static const uint16_t screenHeight = 240;
 WiFiManager wifiManager;
 VoiceActivatedRecorder recorder;
 AnimationManager animations(screenWidth, screenHeight);
+TextStateManager textManager;
 
 // State variables
 bool isShaking = false;
@@ -28,7 +31,7 @@ float acc[3], gyro[3], totalAccel, totalGyro;
 unsigned int tim_count = 0;
 const float ACCEL_THRESHOLD = 2000.0f;
 unsigned long lastShakeCheck = 0;
-const int RESPONSE_DISPLAY_DURATION = 10000;
+const int RESPONSE_DISPLAY_DURATION = 15000;
 
 // Magic 8 ball responses
 const char *responses[] = {
@@ -56,6 +59,8 @@ void uploadWAVFile(uint8_t *buffer, size_t bufferSize)
     Serial.println("Invalid buffer for upload");
     return;
   }
+  unsigned long lastUIUpdate = millis();
+  const int UI_UPDATE_INTERVAL = 500; // Update UI every 100ms
 
   HTTPClient http;
 
@@ -96,13 +101,21 @@ void uploadWAVFile(uint8_t *buffer, size_t bufferSize)
   memcpy(postData + offset, buffer, bufferSize);
   offset += bufferSize;
   memcpy(postData + offset, tail.c_str(), tail.length());
-
+  unsigned long currentTime = millis();
+  lastUIUpdate = currentTime;
+  textManager.update(currentTime);
+  animations.setLabelText(textManager.getCurrentText().c_str());
+  lv_timer_handler();
   // Send the POST request
   int httpResponseCode = http.POST(postData, totalSize);
   free(postData);
-
   if (httpResponseCode > 0)
   {
+    unsigned long currentTime = millis();
+    lastUIUpdate = currentTime;
+    textManager.update(currentTime);
+    animations.setLabelText(textManager.getCurrentText().c_str());
+    lv_timer_handler();
     String response = http.getString();
 
     // Parse the JSON response using ArduinoJson 7.x
@@ -111,6 +124,11 @@ void uploadWAVFile(uint8_t *buffer, size_t bufferSize)
 
     if (!error)
     {
+      unsigned long currentTime = millis();
+      lastUIUpdate = currentTime;
+      textManager.update(currentTime);
+      animations.setLabelText(textManager.getCurrentText().c_str());
+      lv_timer_handler();
       // Print debug information
       Serial.println("\n=== API Response Debug Info ===");
 
@@ -133,7 +151,7 @@ void uploadWAVFile(uint8_t *buffer, size_t bufferSize)
         {
           Serial.printf("GPT Response: %s\n", gptResponse);
           animations.setTriangleColor(0, 0, 255);
-          animations.setLabelText(gptResponse);
+          textManager.setState(TextStateManager::DisplayState::RESPONSE, gptResponse);
         }
 
         // Print timing information
@@ -177,7 +195,8 @@ void uploadWAVFile(uint8_t *buffer, size_t bufferSize)
 
         // Update display with error message
         animations.setTriangleColor(255, 0, 0); // Red for error
-        animations.setLabelText("Error processing request");
+        textManager.setState(TextStateManager::DisplayState::RESPONSE,
+                             String("Error: processing request"));
       }
     }
     else
@@ -186,14 +205,16 @@ void uploadWAVFile(uint8_t *buffer, size_t bufferSize)
       Serial.printf("Raw response: %s\n", response.c_str());
 
       animations.setTriangleColor(255, 0, 0);
-      animations.setLabelText("Error: Failed to parse response");
+      textManager.setState(TextStateManager::DisplayState::RESPONSE,
+                           String("Error: Failed to parse response"));
     }
   }
   else
   {
     Serial.printf("HTTP Error: %s\n", http.errorToString(httpResponseCode).c_str());
     animations.setTriangleColor(255, 0, 0);
-    animations.setLabelText("Error: Failed to connect");
+    textManager.setState(TextStateManager::DisplayState::RESPONSE,
+                         String("Error: Failed to connect"));
   }
 
   http.end();
@@ -276,11 +297,16 @@ void uploadWAVFileLocal(uint8_t *buffer, size_t bufferSize)
 // WiFi status update task
 void updateWiFiStatus(void *parameter)
 {
+  TextStateManager *textManager = (TextStateManager *)parameter;
   for (;;)
   {
     if (WiFi.status() != WL_CONNECTED)
     {
-      animations.setLabelText("Wifi: X");
+      textManager->setState(TextStateManager::DisplayState::ERROR);
+    }
+    else if (textManager->getState() == TextStateManager::DisplayState::ERROR)
+    {
+      textManager->setState(TextStateManager::DisplayState::IDLE);
     }
     vTaskDelay(pdMS_TO_TICKS(30000));
   }
@@ -344,7 +370,7 @@ void setup()
       updateWiFiStatus,
       "WiFiStatus",
       2048,
-      NULL,
+      &textManager, // Pass textManager as parameter
       1,
       NULL);
 
@@ -362,29 +388,52 @@ void setup()
   randomSeed(analogRead(2));
 
   Serial.println("Initialization Complete!");
-  animations.setLabelText("Magic\nGPT8\n\nShake me");
+  textManager.setState(TextStateManager::DisplayState::IDLE);
 }
 
 void loop()
 {
   unsigned long currentTime = millis();
 
-  // Check for shake approximately every 16ms (60Hz)
+  // Priority 1: Handle WiFi manager and essential LVGL tasks
+  wifiManager.process();
+  lv_timer_handler();
+
+  // Priority 2: Handle active recording
+  if (recorder.isRecording())
+  {
+    // When recording, focus on audio capture
+    recorder.update();
+
+    // Minimal UI updates during recording (once per second)
+    if (currentTime - lastShakeCheck >= 1000)
+    {
+      lastShakeCheck = currentTime;
+      textManager.update(currentTime);
+      animations.setLabelText(textManager.getCurrentText().c_str());
+    }
+    return; // Exit loop to prioritize next recording cycle
+  }
+
+  // Normal operation mode (not recording)
+  // Update at 60Hz (every ~16ms)
   if (currentTime - lastShakeCheck >= 16)
   {
     lastShakeCheck = currentTime;
+    textManager.update(currentTime);
 
-    if (checkForShake() && !recordingTriggered && !isShowingResponse)
+    // Check for shake to start recording
+    if (checkForShake() && !recordingTriggered &&
+        textManager.getState() == TextStateManager::DisplayState::IDLE)
     {
       // Start new recording session
       recordingTriggered = true;
       isShaking = true;
-      animations.setTriangleColor(255, 0, 0); // Red for recording
-      animations.setLabelText("Speak now...");
+      animations.setTriangleColor(255, 0, 0);
+      textManager.setState(TextStateManager::DisplayState::RECORDING);
       animations.moveToCenter();
       animations.setShaking(true);
 
-      // Start the voice recording
       if (recorder.startRecording())
       {
         Serial.println("Recording started");
@@ -394,28 +443,31 @@ void loop()
         Serial.println("Failed to start recording");
       }
     }
+    // Check if recording just finished
     else if (recordingTriggered && !recorder.isRecording())
     {
-      // Recording has just finished - show response
       if (!isShowingResponse)
       {
         isShowingResponse = true;
         responseStartTime = currentTime;
-        animations.setLabelText("Processing...");
         if (WiFi.status() == WL_CONNECTED)
         {
           // Upload the WAV file
           uint8_t *wavData = recorder.getBuffer();
           size_t wavSize = recorder.getBufferSize();
           Serial.printf("Recording finished. Captured %d bytes\n", wavSize);
+          textManager.setState(TextStateManager::DisplayState::THINKING);
+          animations.setLabelText(textManager.getCurrentText().c_str());
+          lv_timer_handler();
           uploadWAVFile(wavData, wavSize);
-
         }
-        else{
+        else
+        {
           // Show random response
           int responseIndex = random(0, sizeof(responses) / sizeof(responses[0]));
           animations.setTriangleColor(0, 0, 255);
-          animations.setLabelText(responses[responseIndex]);
+          textManager.setState(TextStateManager::DisplayState::RESPONSE,
+                               responses[responseIndex]);
         }
       }
       // Check if we've shown the response long enough
@@ -426,24 +478,19 @@ void loop()
         isShowingResponse = false;
         isShaking = false;
         animations.setShaking(false);
+        animations.setTriangleColor(0, 0, 255);
+        textManager.setState(TextStateManager::DisplayState::IDLE);
       }
     }
 
-    // Update triangle position when not shaking or transitioning
+    // Update animations when not recording or transitioning
     if (!isShaking && !animations.isTransitioning())
     {
       QMI8658_read_xyz(acc, gyro, &tim_count);
       animations.updateTrianglePosition(gyro[0], gyro[1]);
     }
-  }
 
-  // Handle ongoing processes
-  wifiManager.process();
-  lv_timer_handler();
-
-  // Handle audio recording
-  if (recorder.isRecording())
-  {
-    recorder.update();
+    // Update display text
+    animations.setLabelText(textManager.getCurrentText().c_str());
   }
 }

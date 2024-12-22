@@ -488,6 +488,13 @@ void VoiceActivatedRecorder::update()
         for (size_t i = 0; i < samplesToTake; i++)
         {
             int16_t sample = readADCSample();
+#ifdef ENABLE_DEBUG
+            uint16_t amplitude = abs(sample);
+            debugStats.minAmplitude = std::min(debugStats.minAmplitude, amplitude);
+            debugStats.maxAmplitude = std::max(debugStats.maxAmplitude, amplitude);
+            debugStats.avgAmplitude += amplitude;
+            debugStats.totalSamples++;
+#endif
             samples[i] = sample + 2048; // Store raw sample for voice detection
 
             if (hasDetectedVoice)
@@ -526,14 +533,6 @@ void VoiceActivatedRecorder::update()
         }
 #endif
         lastSampleTime = currentTime;
-
-#ifdef ENABLE_DEBUG
-        uint16_t amplitude = abs(sample);
-        debugStats.minAmplitude = std::min(debugStats.minAmplitude, amplitude);
-        debugStats.maxAmplitude = std::max(debugStats.maxAmplitude, amplitude);
-        debugStats.avgAmplitude += amplitude;
-        debugStats.totalSamples++;
-#endif
     }
     // Update debug stats periodically
     updateDebugStats();
