@@ -7,7 +7,7 @@
 #include "Recorder.h"
 #include "Animations.h"
 #include <algorithm>
-
+#include <ArduinoJson.h>
 // Display configuration
 static const uint16_t screenWidth = 240;
 static const uint16_t screenHeight = 240;
@@ -28,7 +28,7 @@ float acc[3], gyro[3], totalAccel, totalGyro;
 unsigned int tim_count = 0;
 const float ACCEL_THRESHOLD = 2000.0f;
 unsigned long lastShakeCheck = 0;
-const int RESPONSE_DISPLAY_DURATION = 4500;
+const int RESPONSE_DISPLAY_DURATION = 10000;
 
 // Magic 8 ball responses
 const char *responses[] = {
@@ -50,6 +50,156 @@ bool checkForShake()
 }
 
 void uploadWAVFile(uint8_t *buffer, size_t bufferSize)
+{
+  if (!buffer || bufferSize == 0)
+  {
+    Serial.println("Invalid buffer for upload");
+    return;
+  }
+
+  HTTPClient http;
+
+  // Replace with your val.town function URL - you'll get this after deploying the function
+  const char *uploadEndpoint = "https://cyrilengmann-efficientcoppercat.web.val.run";
+
+  Serial.printf("Uploading WAV file (%d bytes) to val.town\n", bufferSize);
+
+  http.begin(uploadEndpoint);
+
+  // Set headers for multipart form data
+  String boundary = "AudioBoundary";
+  String contentType = "multipart/form-data; boundary=" + boundary;
+  http.addHeader("Content-Type", contentType);
+
+  // Create the multipart form data
+  String head = "--" + boundary + "\r\n";
+  head += "Content-Disposition: form-data; name=\"file\"; filename=\"recording.wav\"\r\n";
+  head += "Content-Type: audio/wav\r\n\r\n";
+
+  String tail = "\r\n--" + boundary + "--\r\n";
+
+  // Calculate total size and allocate buffer
+  size_t totalSize = head.length() + bufferSize + tail.length();
+  uint8_t *postData = (uint8_t *)malloc(totalSize);
+
+  if (!postData)
+  {
+    Serial.println("Failed to allocate memory for POST data");
+    http.end();
+    return;
+  }
+
+  // Assemble the POST data
+  size_t offset = 0;
+  memcpy(postData, head.c_str(), head.length());
+  offset += head.length();
+  memcpy(postData + offset, buffer, bufferSize);
+  offset += bufferSize;
+  memcpy(postData + offset, tail.c_str(), tail.length());
+
+  // Send the POST request
+  int httpResponseCode = http.POST(postData, totalSize);
+  free(postData);
+
+  if (httpResponseCode > 0)
+  {
+    String response = http.getString();
+
+    // Parse the JSON response using ArduinoJson 7.x
+    JsonDocument doc;
+    DeserializationError error = deserializeJson(doc, response);
+
+    if (!error)
+    {
+      // Print debug information
+      Serial.println("\n=== API Response Debug Info ===");
+
+      // Check if request was successful
+      bool success = doc["success"].as<bool>();
+      Serial.printf("Success: %s\n", success ? "true" : "false");
+
+      if (success)
+      {
+        // Print transcription
+        const char *transcription = doc["transcription"].as<const char *>();
+        if (transcription)
+        {
+          Serial.printf("Transcription: %s\n", transcription);
+        }
+
+        // Print GPT response
+        const char *gptResponse = doc["response"].as<const char *>();
+        if (gptResponse)
+        {
+          Serial.printf("GPT Response: %s\n", gptResponse);
+          animations.setTriangleColor(0, 0, 255);
+          animations.setLabelText(gptResponse);
+        }
+
+        // Print timing information
+        JsonObject timings = doc["debug"]["timings"];
+        if (!timings.isNull())
+        {
+          Serial.println("\nAPI Timings:");
+          Serial.printf("Whisper Duration: %dms\n", timings["whisperDuration"].as<int>());
+          Serial.printf("GPT Duration: %dms\n", timings["gptDuration"].as<int>());
+          Serial.printf("Total Duration: %dms\n", timings["totalDuration"].as<int>());
+        }
+
+        // Print processing steps
+        JsonArray steps = doc["debug"]["steps"];
+        if (!steps.isNull())
+        {
+          Serial.println("\nProcessing Steps:");
+          for (JsonVariant step : steps)
+          {
+            Serial.printf("- %s\n", step.as<const char *>());
+          }
+        }
+      }
+      else
+      {
+        // Handle error case
+        const char *errorMsg = doc["error"].as<const char *>();
+        Serial.printf("\nError: %s\n", errorMsg ? errorMsg : "Unknown error");
+
+        // Print error details if available
+        JsonArray errors = doc["debug"]["errors"];
+        if (!errors.isNull())
+        {
+          Serial.println("\nError Details:");
+          for (JsonVariant error : errors)
+          {
+            Serial.printf("- %s\n", error["message"].as<const char *>());
+            Serial.printf("  Time: %s\n", error["timestamp"].as<const char *>());
+          }
+        }
+
+        // Update display with error message
+        animations.setTriangleColor(255, 0, 0); // Red for error
+        animations.setLabelText("Error processing request");
+      }
+    }
+    else
+    {
+      Serial.printf("JSON parsing failed: %s\n", error.c_str());
+      Serial.printf("Raw response: %s\n", response.c_str());
+
+      animations.setTriangleColor(255, 0, 0);
+      animations.setLabelText("Error: Failed to parse response");
+    }
+  }
+  else
+  {
+    Serial.printf("HTTP Error: %s\n", http.errorToString(httpResponseCode).c_str());
+    animations.setTriangleColor(255, 0, 0);
+    animations.setLabelText("Error: Failed to connect");
+  }
+
+  http.end();
+}
+
+void uploadWAVFileLocal(uint8_t *buffer, size_t bufferSize)
 {
   if (!buffer || bufferSize == 0)
   {
@@ -128,16 +278,11 @@ void updateWiFiStatus(void *parameter)
 {
   for (;;)
   {
-    if (WiFi.status() == WL_CONNECTED)
+    if (WiFi.status() != WL_CONNECTED)
     {
-      String ip = WiFi.localIP().toString();
-      animations.setLabelTextFormatted("WiFi: Connected\nIP: %s", ip.c_str());
+      animations.setLabelText("Wifi: X");
     }
-    else
-    {
-      animations.setLabelText("DISCONNECTED");
-    }
-    vTaskDelay(pdMS_TO_TICKS(5000));
+    vTaskDelay(pdMS_TO_TICKS(30000));
   }
 }
 
@@ -217,6 +362,7 @@ void setup()
   randomSeed(analogRead(2));
 
   Serial.println("Initialization Complete!");
+  animations.setLabelText("Magic\nGPT8\n\nShake me");
 }
 
 void loop()
@@ -255,16 +401,22 @@ void loop()
       {
         isShowingResponse = true;
         responseStartTime = currentTime;
+        animations.setLabelText("Processing...");
+        if (WiFi.status() == WL_CONNECTED)
+        {
+          // Upload the WAV file
+          uint8_t *wavData = recorder.getBuffer();
+          size_t wavSize = recorder.getBufferSize();
+          Serial.printf("Recording finished. Captured %d bytes\n", wavSize);
+          uploadWAVFile(wavData, wavSize);
 
-        // Upload the WAV file
-        uint8_t *wavData = recorder.getBuffer();
-        size_t wavSize = recorder.getBufferSize();
-        uploadWAVFile(wavData, wavSize);
-
-        // Show random response
-        int responseIndex = random(0, sizeof(responses) / sizeof(responses[0]));
-        animations.setTriangleColor(0, 0, 255);
-        animations.setLabelText(responses[responseIndex]);
+        }
+        else{
+          // Show random response
+          int responseIndex = random(0, sizeof(responses) / sizeof(responses[0]));
+          animations.setTriangleColor(0, 0, 255);
+          animations.setLabelText(responses[responseIndex]);
+        }
       }
       // Check if we've shown the response long enough
       else if (currentTime - responseStartTime >= RESPONSE_DISPLAY_DURATION)
@@ -293,22 +445,5 @@ void loop()
   if (recorder.isRecording())
   {
     recorder.update();
-
-    // Check if recording just finished
-    if (!recorder.isRecording())
-    {
-      uint8_t *wavData = recorder.getBuffer();
-      size_t wavSize = recorder.getBufferSize();
-
-      Serial.printf("Recording finished. Captured %d bytes\n", wavSize);
-
-      // Here you would process the audio or send it to your AI service
-      // sendToAIService(wavData, wavSize);
-      animations.setLabelText("Processing...");
-      delay(1000);
-    }
   }
-
-  // Small delay to prevent busy-waiting
-  delay(3);
 }
