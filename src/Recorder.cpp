@@ -28,6 +28,54 @@ VoiceActivatedRecorder::~VoiceActivatedRecorder()
     }
 }
 
+void VoiceActivatedRecorder::updateDebugStats()
+{
+    unsigned long currentTime = millis();
+
+    if (currentTime - debugStats.lastDebugTime >= DEBUG_INTERVAL)
+    {
+#ifdef ENABLE_DEBUG
+        printDebugInfo();
+        debugStats.reset();
+#endif
+        debugStats.lastDebugTime = currentTime;
+    }
+}
+
+void VoiceActivatedRecorder::printDebugInfo()
+{
+    // Print consolidated debug information
+    DEBUG_PRINTF("=== Recording Stats ===\n");
+    DEBUG_PRINTF("Buffer: %lu/%lu bytes (%.1f%%)\n",
+                 bufferIndex,
+                 BUFFER_SIZE,
+                 (float)bufferIndex / BUFFER_SIZE * 100);
+
+    DEBUG_PRINTF("Audio: min=%u, max=%u, avg=%.2f, crossings=%lu\n",
+                 debugStats.minAmplitude,
+                 debugStats.maxAmplitude,
+                 debugStats.avgAmplitude,
+                 debugStats.zeroCrossings);
+
+    DEBUG_PRINTF("Timing: total=%lu, missed=%lu (%.1f%%)\n",
+                 debugStats.totalSamples,
+                 debugStats.missedSamples,
+                 (float)debugStats.missedSamples / debugStats.totalSamples * 100);
+
+    if (is_recording)
+    {
+        DEBUG_PRINTF("Recording: %lu ms, Last sound: %lu ms ago\n",
+                     millis() - recordStartTime,
+                     millis() - lastSoundTime);
+    }
+
+    // Memory status
+    size_t currentHeap = esp_get_free_heap_size();
+    size_t currentPSRAM = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
+    DEBUG_PRINTF("Memory - Heap: %d bytes, PSRAM: %d bytes\n",
+                 currentHeap, currentPSRAM);
+}
+
 void VoiceActivatedRecorder::checkADCSetup()
 {
     DEBUG_PRINTF("ADC Pin Configuration: Channel %d, GPIO %d\n", ADC_MIC_CHANNEL, ADC_MIC_GPIO_NUM);
@@ -180,33 +228,45 @@ void VoiceActivatedRecorder::writeWAVHeader()
     if (!audioBuffer)
         return;
 
-    uint8_t header[WAV_HEADER_SIZE] = {
-        'R', 'I', 'F', 'F', // RIFF chunk ID
-        0, 0, 0, 0,         // Chunk size (to be filled later)
-        'W', 'A', 'V', 'E', // Format
-        'f', 'm', 't', ' ', // Subchunk1 ID
-        16, 0, 0, 0,        // Subchunk1 size (16 for PCM)
-        1, 0,               // Audio format (1 = PCM)
-        CHANNELS, 0,        // Number of channels
-        // Sample rate
-        (uint8_t)(SAMPLE_RATE & 0xFF),
-        (uint8_t)((SAMPLE_RATE >> 8) & 0xFF),
-        (uint8_t)((SAMPLE_RATE >> 16) & 0xFF),
-        (uint8_t)((SAMPLE_RATE >> 24) & 0xFF),
-        // Byte rate
-        0, 0, 0, 0,         // To be filled
-        CHANNELS * 2, 0,    // Block align
-        16, 0,              // Bits per sample (16-bit)
-        'd', 'a', 't', 'a', // Subchunk2 ID
-        0, 0, 0, 0          // Subchunk2 size (to be filled later)
-    };
+    DEBUG_PRINTF("Buffer size calculated as: %d bytes (%.1f seconds at %dHz)\n",
+                 BUFFER_SIZE,
+                 (float)BUFFER_SIZE / (SAMPLE_RATE * CHANNELS * 2),
+                 SAMPLE_RATE);
 
-    // Calculate byte rate
-    uint32_t byteRate = SAMPLE_RATE * CHANNELS * 2; // 2 bytes per sample
-    header[28] = byteRate & 0xFF;
-    header[29] = (byteRate >> 8) & 0xFF;
-    header[30] = (byteRate >> 16) & 0xFF;
-    header[31] = (byteRate >> 24) & 0xFF;
+    uint32_t sampleRate = SAMPLE_RATE;
+    uint16_t numChannels = CHANNELS;
+    uint16_t bitsPerSample = 16; // Always use 16-bit for WAV
+    uint32_t byteRate = sampleRate * numChannels * (bitsPerSample / 8);
+    uint16_t blockAlign = numChannels * (bitsPerSample / 8);
+
+    // Create header with explicit uint8_t casts
+    uint8_t header[WAV_HEADER_SIZE] = {
+        'R', 'I', 'F', 'F',                   // ChunkID
+        0, 0, 0, 0,                           // ChunkSize (filled later)
+        'W', 'A', 'V', 'E',                   // Format
+        'f', 'm', 't', ' ',                   // Subchunk1ID
+        16, 0, 0, 0,                          // Subchunk1Size (16 for PCM)
+        1, 0,                                 // AudioFormat (1 = PCM)
+        static_cast<uint8_t>(numChannels), 0, // NumChannels
+        // Sample rate (little endian)
+        static_cast<uint8_t>(sampleRate & 0xFF),
+        static_cast<uint8_t>((sampleRate >> 8) & 0xFF),
+        static_cast<uint8_t>((sampleRate >> 16) & 0xFF),
+        static_cast<uint8_t>((sampleRate >> 24) & 0xFF),
+        // Byte rate (little endian)
+        static_cast<uint8_t>(byteRate & 0xFF),
+        static_cast<uint8_t>((byteRate >> 8) & 0xFF),
+        static_cast<uint8_t>((byteRate >> 16) & 0xFF),
+        static_cast<uint8_t>((byteRate >> 24) & 0xFF),
+        // Block align (little endian)
+        static_cast<uint8_t>(blockAlign & 0xFF),
+        static_cast<uint8_t>((blockAlign >> 8) & 0xFF),
+        // Bits per sample (little endian)
+        static_cast<uint8_t>(bitsPerSample & 0xFF),
+        static_cast<uint8_t>((bitsPerSample >> 8) & 0xFF),
+        'd', 'a', 't', 'a', // Subchunk2ID
+        0, 0, 0, 0          // Subchunk2Size (filled later)
+    };
 
     memcpy(audioBuffer, header, WAV_HEADER_SIZE);
     bufferIndex = WAV_HEADER_SIZE;
@@ -262,6 +322,8 @@ bool VoiceActivatedRecorder::detectVoiceActivity(uint16_t *buffer, size_t size)
     if (!buffer || size == 0)
         return false;
 
+    static unsigned long lastVoiceDebug = 0;
+
     // Track zero crossings and amplitude
     int zero_crossings = 0;
     uint32_t sum_amplitude = 0;
@@ -272,11 +334,9 @@ bool VoiceActivatedRecorder::detectVoiceActivity(uint16_t *buffer, size_t size)
     {
         int16_t current = (int16_t)buffer[i] - 2048;
 
-        // Count zero crossings (frequency detection)
         if (last_sample < 0 && current >= 0)
             zero_crossings++;
 
-        // Track amplitude
         uint16_t amplitude = abs(current);
         sum_amplitude += amplitude;
         max_amplitude = max(max_amplitude, amplitude);
@@ -287,15 +347,23 @@ bool VoiceActivatedRecorder::detectVoiceActivity(uint16_t *buffer, size_t size)
     float avg_amplitude = sum_amplitude / (float)size;
     float crossing_rate = (zero_crossings * 1000.0f) / (size / (SAMPLE_RATE / 1000.0f));
 
-    DEBUG_PRINTF("Voice Stats - Avg Amp: %.2f, Max Amp: %d, Crossings/s: %.2f\n",
-                 avg_amplitude, max_amplitude, crossing_rate);
+    // Print debug only 4 times per second
+    if (millis() - lastVoiceDebug > DEBUG_INTERVAL)
+    {
+        DEBUG_PRINTF("Voice Stats - Avg Amp: %.2f, Max Amp: %d, Crossings/s: %.2f\n",
+                     avg_amplitude, max_amplitude, crossing_rate);
+        lastVoiceDebug = millis();
+    }
 
-    // Based on your logs, adjust these thresholds
-    bool is_voice = (avg_amplitude > 2000.0f) || (max_amplitude > 8000);
+    bool is_voice = (avg_amplitude > 1000.0f) || (max_amplitude > 4000);
+
+    if (is_voice)
+    {
+        lastSoundTime = millis();
+    }
 
     return is_voice;
 }
-
 bool VoiceActivatedRecorder::startRecording()
 {
     if (is_recording || !audioBuffer)
@@ -338,34 +406,44 @@ int16_t VoiceActivatedRecorder::readADCSample()
         return 0;
     }
 
-    // Read raw value from ADC
+    // Read raw value from ADC (0-4095 for 12-bit)
     uint32_t raw = adc1_get_raw(ADC_MIC_CHANNEL);
 
-    // Convert to voltage using calibration
+    // Convert to voltage (in mV)
     uint32_t voltage = esp_adc_cal_raw_to_voltage(raw, adc_chars);
 
-    // Center around DC bias (1.25V) and scale appropriately
-    // MAX9814 outputs around 1.25V DC bias, so subtract that first
-    int16_t centered = voltage - DC_OFFSET;
+    // Center around DC bias (1.25V = 1250mV)
+    int32_t centered = voltage - DC_OFFSET;
 
-    // Scale to 16-bit range (-32768 to 32767)
-    int16_t sample = (centered * 32768) / (MAX9814_VPP / 2);
+    // Use more conservative amplification
+    centered *= 4; // Single-stage amplification
 
-    static unsigned long lastSampleDebug = 0;
-    if (millis() - lastSampleDebug > 1000)
+    // Scale to get more reasonable levels while avoiding clipping
+    // Map our typical voltage range of ±1V to about ±16000 in 16-bit space
+    centered = (centered * 16000) / 1000; // Scale based on millivolts
+
+    // Clamp to 16-bit range
+    if (centered > 32767)
+        centered = 32767;
+    if (centered < -32768)
+        centered = -32768;
+    int16_t sample = centered;
+    
+    // int16_t sample = (centered * 32768) / (MAX9814_VPP / 2);
+
+        static unsigned long lastSampleDebug = 0;
+    if (millis() - lastSampleDebug > DEBUG_INTERVAL)
     { // Debug print once per second
-        DEBUG_PRINTF("Sample Details - Raw: %d, Voltage: %dmV, Centered: %d, Final: %d\n",
-                     raw, voltage, centered, sample);
+        DEBUG_PRINTF("ADC Sample - Raw: %d, Voltage: %d mV, Scaled: %d\n",
+                     raw, voltage, sample);
         lastSampleDebug = millis();
     }
 
-    return sample;
+    return (int16_t)sample;
 }
 
 void VoiceActivatedRecorder::update()
 {
-    static unsigned long lastDebugPrint = 0;
-    const unsigned long DEBUG_INTERVAL = 1000; // Print debug info every second
     if (!is_recording || !audioBuffer || bufferIndex >= BUFFER_SIZE)
     {
         if (bufferIndex >= BUFFER_SIZE)
@@ -383,22 +461,8 @@ void VoiceActivatedRecorder::update()
         }
         return;
     }
-    size_t remainingBytes = BUFFER_SIZE - bufferIndex;
-    size_t remainingSeconds = remainingBytes / (SAMPLE_RATE * CHANNELS * 2);
 
-
-    // Periodic debug info
     unsigned long currentTime = millis();
-    if (currentTime - lastDebugPrint >= DEBUG_INTERVAL)
-    {
-        printADCInfo();
-        printBufferStatus();
-        printRecordingStatus();
-        lastDebugPrint = currentTime;
-        DEBUG_PRINTF("Remaining buffer: %lu bytes (%lu seconds)\n",
-                     remainingBytes, remainingSeconds);
-    }
- 
     // Check maximum recording time
     if (currentTime - recordStartTime >= MAX_RECORD_SECONDS * 1000)
     {
@@ -406,13 +470,10 @@ void VoiceActivatedRecorder::update()
         stopRecording();
         return;
     }
-
-    // Calculate time since last sample
     unsigned long sampleInterval = 1000 / SAMPLE_RATE;
 
     if (currentTime - lastSampleTime >= sampleInterval)
     {
-        // Create a small buffer for voice detection
         uint16_t samples[SAMPLE_BUFFER_SIZE];
         size_t samplesToTake = std::min(
             static_cast<size_t>(SAMPLE_BUFFER_SIZE),
@@ -424,8 +485,6 @@ void VoiceActivatedRecorder::update()
             stopRecording();
             return;
         }
-
-        DEBUG_PRINTF("Taking %d samples...\n", samplesToTake);
         for (size_t i = 0; i < samplesToTake; i++)
         {
             int16_t sample = readADCSample();
@@ -433,7 +492,7 @@ void VoiceActivatedRecorder::update()
 
             if (hasDetectedVoice)
             {
-                // Add buffer overflow protection
+                // Protect against buffer overflow
                 if (bufferIndex + 2 >= BUFFER_SIZE)
                 {
                     DEBUG_PRINT("Buffer overflow prevented - stopping recording");
@@ -446,6 +505,7 @@ void VoiceActivatedRecorder::update()
             }
         }
 
+#ifdef ENABLE_VOICE_DETECTION
         bool hasVoice = detectVoiceActivity(samples, samplesToTake);
 
         if (hasVoice)
@@ -456,24 +516,25 @@ void VoiceActivatedRecorder::update()
                 hasDetectedVoice = true;
                 DEBUG_PRINT("Voice detected - recording started");
             }
-            DEBUG_PRINTF("Sound detected at %lu ms, buffer at %lu bytes (%lu bytes remaining)\n",
-                         currentTime, bufferIndex, BUFFER_SIZE - bufferIndex);
         }
         else if (hasDetectedVoice && (currentTime - lastSoundTime >= SILENCE_TIMEOUT))
         {
             DEBUG_PRINTF("Silence timeout: last sound was %lu ms ago\n",
-                            currentTime - lastSoundTime);
+                         currentTime - lastSoundTime);
             stopRecording();
             return;
         }
-
+#endif
         lastSampleTime = currentTime;
-        // Debug sample buffer status
-        if (hasDetectedVoice)
-        {
-            DEBUG_PRINTF("Recorded %d bytes. Buffer at %.1f%%\n",
-                         bufferIndex,
-                         (float)bufferIndex / BUFFER_SIZE * 100);
-        }
+
+#ifdef ENABLE_DEBUG
+        uint16_t amplitude = abs(sample);
+        debugStats.minAmplitude = std::min(debugStats.minAmplitude, amplitude);
+        debugStats.maxAmplitude = std::max(debugStats.maxAmplitude, amplitude);
+        debugStats.avgAmplitude += amplitude;
+        debugStats.totalSamples++;
+#endif
     }
+    // Update debug stats periodically
+    updateDebugStats();
 }
