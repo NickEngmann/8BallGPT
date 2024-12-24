@@ -126,10 +126,8 @@ void AnimationManager::moveToCenter()
   {
     _isTransitioningToCenter = true;
 
-    // Calculate position in bottom third of screen
-    _target_x = (screenWidth - triangleSize) / 2;  // Centers horizontally
-    _target_y = (screenHeight - triangleSize) / 2; // Centers vertically
-
+    _target_x = 120;
+    _target_y = 40;
     // Reset velocities
     _velocity_x = 0;
     _velocity_y = 0;
@@ -179,8 +177,9 @@ void AnimationManager::updateTrianglePosition(float gyro_x, float gyro_y)
   }
   else
   {
-    _target_x += gyro_y * GYRO_SENSITIVITY;
-    _target_y += gyro_x * GYRO_SENSITIVITY;
+    // Invert gyro inputs to match intuitive direction
+    _target_x += gyro_y * GYRO_SENSITIVITY; // Changed from += to -=
+    _target_y -= gyro_x * GYRO_SENSITIVITY; // Changed from += to -=
   }
 
   constrainPosition();
