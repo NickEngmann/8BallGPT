@@ -19,6 +19,8 @@ The Magic (GPT)8 Ball is a modern reinvention of the classic fortune-telling toy
 
 ## Hardware Requirements
 
+![Project Wiring Diagram](img/1.png)
+
 ### Core Components
 
 - Waveshare ESP32-S3 1.28" LCD Development Board
