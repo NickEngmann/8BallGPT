@@ -9,6 +9,8 @@
 #include <algorithm>
 #include <ArduinoJson.h>
 #include "TextStateManager.h"
+#include "VibrationManager.h"
+#include "LEDLogger.h"
 
 // Display configuration
 static const uint16_t screenWidth = 240;
@@ -19,6 +21,8 @@ WiFiManager wifiManager;
 VoiceActivatedRecorder recorder;
 AnimationManager animations(screenWidth, screenHeight);
 TextStateManager textManager;
+VibrationManager vibration(5,13);
+LEDLogger ledLogger(3);
 
 // State variables
 bool isShaking = false;
@@ -29,7 +33,7 @@ unsigned long lastShakeTime = 0;
 unsigned long responseDisplayStart = 0;
 float acc[3], gyro[3], totalAccel, totalGyro;
 unsigned int tim_count = 0;
-const float ACCEL_THRESHOLD = 2000.0f;
+const float ACCEL_THRESHOLD = 3000.0f;
 unsigned long lastShakeCheck = 0;
 const int RESPONSE_DISPLAY_DURATION = 15000;
 
@@ -109,6 +113,7 @@ void uploadWAVFile(uint8_t *buffer, size_t bufferSize)
   // Send the POST request
   int httpResponseCode = http.POST(postData, totalSize);
   free(postData);
+  vibration.stop();
   if (httpResponseCode > 0)
   {
     unsigned long currentTime = millis();
@@ -303,6 +308,7 @@ void updateWiFiStatus(void *parameter)
     if (WiFi.status() != WL_CONNECTED)
     {
       textManager->setState(TextStateManager::DisplayState::ERROR);
+      ledLogger.setState(LEDLogger::SystemState::ERROR, LEDLogger::LEDPattern::BLINK);
     }
     else if (textManager->getState() == TextStateManager::DisplayState::ERROR)
     {
@@ -315,6 +321,9 @@ void updateWiFiStatus(void *parameter)
 void setup()
 {
   Serial.begin(115200);
+
+  ledLogger.begin();
+  ledLogger.setState(LEDLogger::SystemState::STARTUP, LEDLogger::LEDPattern::PULSE);
 
   if (psramInit())
   {
@@ -355,6 +364,9 @@ void setup()
   }
   animations.initializeTriangle();
 
+  vibration.begin();
+  vibration.shortBuzz(); // Indicate startup
+
   // Initialize WiFi
   WiFi.mode(WIFI_STA);
   IPAddress portalIP(8, 8, 4, 4);
@@ -387,6 +399,10 @@ void setup()
   // Random seed for responses
   randomSeed(analogRead(2));
 
+  if (WiFi.status() == WL_CONNECTED)
+  {
+    ledLogger.setState(LEDLogger::SystemState::NORMAL);
+  }
   Serial.println("Initialization Complete!");
   textManager.setState(TextStateManager::DisplayState::IDLE);
 }
@@ -394,10 +410,13 @@ void setup()
 void loop()
 {
   unsigned long currentTime = millis();
+  
 
   // Priority 1: Handle WiFi manager and essential LVGL tasks
   wifiManager.process();
   lv_timer_handler();
+  vibration.update();
+  ledLogger.update();
 
   // Priority 2: Handle active recording
   if (recorder.isRecording())
@@ -411,6 +430,7 @@ void loop()
       lastShakeCheck = currentTime;
       textManager.update(currentTime);
       animations.setLabelText(textManager.getCurrentText().c_str());
+      ledLogger.setState(LEDLogger::SystemState::BUSY, LEDLogger::LEDPattern::PULSE);
     }
     return; // Exit loop to prioritize next recording cycle
   }
@@ -433,7 +453,8 @@ void loop()
       textManager.setState(TextStateManager::DisplayState::RECORDING);
       animations.moveToCenter();
       animations.setShaking(true);
-
+      vibration.mediumBuzz();
+      ledLogger.setState(LEDLogger::SystemState::BUSY, LEDLogger::LEDPattern::BLINK);
       if (recorder.startRecording())
       {
         Serial.println("Recording started");
@@ -441,6 +462,7 @@ void loop()
       else
       {
         Serial.println("Failed to start recording");
+        ledLogger.setState(LEDLogger::SystemState::ERROR, LEDLogger::LEDPattern::FAST_BLINK);
       }
     }
     // Check if recording just finished
@@ -448,6 +470,7 @@ void loop()
     {
       if (!isShowingResponse)
       {
+        vibration.shortBuzz();
         isShowingResponse = true;
         responseStartTime = currentTime;
         if (WiFi.status() == WL_CONNECTED)
@@ -457,9 +480,11 @@ void loop()
           size_t wavSize = recorder.getBufferSize();
           Serial.printf("Recording finished. Captured %d bytes\n", wavSize);
           textManager.setState(TextStateManager::DisplayState::THINKING);
+          ledLogger.setState(LEDLogger::SystemState::BUSY, LEDLogger::LEDPattern::PULSE);
           animations.setLabelText(textManager.getCurrentText().c_str());
           lv_timer_handler();
           uploadWAVFile(wavData, wavSize);
+          vibration.stop();
         }
         else
         {
@@ -468,18 +493,21 @@ void loop()
           animations.setTriangleColor(0, 0, 255);
           textManager.setState(TextStateManager::DisplayState::RESPONSE,
                                responses[responseIndex]);
+          ledLogger.setState(LEDLogger::SystemState::WARNING, LEDLogger::LEDPattern::BLINK);
         }
       }
       // Check if we've shown the response long enough
       else if (currentTime - responseStartTime >= RESPONSE_DISPLAY_DURATION)
       {
         // Reset all states
+        vibration.stop();
         recordingTriggered = false;
         isShowingResponse = false;
         isShaking = false;
         animations.setShaking(false);
         animations.setTriangleColor(0, 0, 255);
         textManager.setState(TextStateManager::DisplayState::IDLE);
+        ledLogger.setState(LEDLogger::SystemState::NORMAL);
       }
     }
 
