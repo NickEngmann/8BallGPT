@@ -1,154 +1,215 @@
 # Magic (GPT)8 Ball 🎱
 
 ## Overview
-The Magic (GPT)8 Ball is a modern take on the classic fortune-telling toy, combining hardware and AI to create an interactive experience. When shaken, it records your spoken question through a microphone, processes it using ChatGPT, and displays a mystical response on its built-in screen. The device features motion detection, voice recording, and wireless connectivity for real-time AI responses.
 
-## How It Works
-1. The device uses an accelerometer/gyroscope (QMI8658) to detect when you shake it
-2. When shaken, it activates the microphone to record your question
-3. The recording is sent to OpenAI's Whisper API for speech-to-text conversion
-4. The text is then processed by ChatGPT to generate a mystical response
-5. The response appears on the circular LCD display
+The Magic (GPT)8 Ball is a modern reinvention of the classic fortune-telling toy, powered by AI and IoT technology. It features voice recognition, motion sensing, and real-time AI responses through ChatGPT. When shaken, it records your question through a built-in microphone, processes it using OpenAI's APIs, and displays a mystical response on its integrated circular display.
+
+## Features
+
+- Voice-activated recording with automatic silence detection
+- Motion-based activation using QMI8658 6-axis IMU
+- Real-time transcription using OpenAI's Whisper API
+- AI-powered responses from ChatGPT
+- Smooth animations and UI transitions
+- RGB LED status indicator
+- Haptic feedback through dual vibration motors
+- WiFi manager for easy network setup
+- Offline mode with classic Magic 8 Ball responses
+- Built-in battery management and charging
 
 ## Hardware Requirements
 
-![Project Wiring Diagram](img/1.png)
-
 ### Core Components
+
 - Waveshare ESP32-S3 1.28" LCD Development Board
-  - Built-in 1.28" Round LCD Display (240×240 resolution)
   - ESP32-S3 microcontroller
-  - QMI8658 6-axis IMU (accelerometer + gyroscope)
+  - 1.28" Round LCD Display (240×240 resolution)
+  - Built-in QMI8658 6-axis IMU
+  - USB-C for programming and charging
 - MAX9814 Microphone Amplifier Module
+- 2x Vibration Motors
+- WS2812B RGB LED
 - 1200mAh LiPo Battery
+- 3D printed enclosure (files TBD)
 
-### Additional Components
-- JST connectors for battery
-- Wires for connecting components
-- 3D printed case (design files TBD)
+### Pin Connections
 
-## Pin Connections
+#### Built-in Components (ESP32-S3 Board)
 
-### LCD Display (Built into ESP32-S3 board)
-- LCD_DC: GPIO8
-- LCD_CS: GPIO9
-- LCD_CLK: GPIO10
-- LCD_MOSI: GPIO11
-- LCD_RST: GPIO12
-- LCD_BL: GPIO40 (Backlight)
+- LCD Display
+  - DC: GPIO8
+  - CS: GPIO9
+  - CLK: GPIO10
+  - MOSI: GPIO11
+  - RST: GPIO12
+  - BL: GPIO40
+- QMI8658 IMU
+  - SDA: GPIO6
+  - SCL: GPIO7
 
-### MAX9814 Microphone
-- VDD -> 3.3V
-- GND -> GND
-- OUT -> GPIO2 (ADC1_CH1)
-- AR -> Not connected
-- GAIN -> Not connected (default gain)
+#### External Components
 
-### QMI8658 IMU (Built into ESP32-S3 board)
-- SDA: GPIO6
-- SCL: GPIO7
+- MAX9814 Microphone
+  - VDD → 3.3V
+  - GND → GND
+  - OUT → GPIO2 (ADC1_CH1)
+- Vibration Motors
+  - Motor 1: GPIO5
+  - Motor 2: GPIO13
+- RGB LED: GPIO3
 
 ## Software Setup
 
-### Prerequisites
+### Development Environment
+
 1. Install Visual Studio Code
 2. Install PlatformIO IDE extension
-3. Install Git
+3. Clone the repository:
 
-### Building the Project
-1. Clone the repository:
    ```bash
    git clone https://github.com/NickEngmann/MagicGPT8Ball.git
    cd MagicGPT8Ball
    ```
 
-2. Open the project in VS Code with PlatformIO
+### Dependencies
 
-3. Install dependencies:
-   - WiFiManager for network configuration
-   - ArduinoJson for API communication
-   - LVGL for display graphics
-   - TFT_eSPI for display driver
+- WiFiManager for network configuration
+- ArduinoJson (7.x) for API communication
+- LVGL for UI and animations
+- TFT_eSPI for display driver
+- Adafruit_NeoPixel for RGB LED control
 
-4. Set up val.town account:
-   - Create account at val.town
-   - Deploy the val.town.js function from the repository
-   - Copy your function URL
+### APIs and Services
 
-5. Configure the project:
-   - Copy your val.town function URL to main.cpp
-   - Update WiFi credentials (or use WiFiManager portal)
+1. Set up a val.town account:
+   - Deploy the included `val.town.js` function
+   - Update the endpoint URL in `main.cpp`
+2. Configure OpenAI API key in val.town environment
 
-6. Build and upload:
+### Building and Flashing
+
+1. Open project in VS Code with PlatformIO
+2. Install dependencies:
+
+   ```bash
+   pio lib install
+   ```
+
+3. Build and upload:
+
    ```bash
    pio run --target upload
    ```
 
-## Usage
+## Usage Instructions
 
-1. Power on the device using the switch
-2. On first boot, connect to the "MagicGPT8Ball" WiFi network
-3. Follow the portal instructions to configure your WiFi
-4. Once connected, the display will show "Magic GPT8 Ball - Shake me"
-5. Shake the device to start recording
-6. Ask your question while the red recording indicator is shown
-7. Wait for the mystical response to appear
+### First-Time Setup
 
-### Offline Mode
-- If WiFi is not available, the device will fall back to classic Magic 8 Ball responses
-- No internet connection is required for basic functionality
+1. Power on the device
+2. Connect to "MagicGPT8Ball" WiFi network
+3. Configure your WiFi through the captive portal
+4. Device will restart and connect to your network
 
-## Development
+### Daily Use
 
-### Project Structure
-- `src/main.cpp`: Main application code
-- `src/Animations.*`: Display animation handling
-- `src/Recorder.*`: Audio recording functionality
-- `src/TextStateManager.*`: Display text state management
-- `lib/`: External libraries and drivers
-- `val.town.js`: Serverless function for API processing
+1. Wake device by moving it or pressing the power button
+2. Wait for "Shake me" prompt
+3. Shake device to activate recording
+4. Speak your question clearly
+5. Wait for response (blue animation indicates processing)
+6. Device will display the AI-generated response
+7. Shake again for a new question
 
-### Key Features
-- Voice-activated recording with silence detection
-- Motion-based activation using 6-axis IMU
-- Smooth animations and transitions
-- Fail-safe offline mode
-- WiFi manager for easy network configuration
-- PSRAM utilization for audio buffer
+### LED Status Indicators
+
+- Blue pulse: Starting up
+- Solid green: Ready
+- Red blink: Recording
+- Cyan pulse: Processing
+- Yellow blink: Offline mode
+- Purple blink: Error state
+
+## Advanced Features
+
+### Debug Mode
+
+Enable detailed logging by uncommenting `#define ENABLE_DEBUG` in the following files:
+
+- `Recorder.h` - Audio debugging
+- `main.cpp` - System debugging
+
+### Voice Detection Parameters
+
+Adjust sensitivity in `Recorder.h`:
+
+- `AUDIO_THRESHOLD`: Voice detection threshold
+- `SILENCE_TIMEOUT`: Silence duration before stopping
+- `MAX_RECORD_SECONDS`: Maximum recording duration
+
+### Animation Settings
+
+Customize animations in `Animations.h`:
+
+- `MOTION_SMOOTHING`: Movement smoothness
+- `GYRO_SENSITIVITY`: Motion sensitivity
+- `IDLE_AMPLITUDE`: Idle animation range
+
+## Project Structure
+
+```
+├── src/
+│   ├── main.cpp              # Main application logic
+│   ├── Animations.*          # Display animations
+│   ├── Recorder.*           # Audio recording
+│   ├── TextStateManager.*   # Display text handling
+│   ├── VibrationManager.*   # Haptic feedback
+│   └── LEDLogger.*         # RGB LED control
+├── lib/
+│   └── QMI8658/            # IMU driver
+└── val.town.js             # Serverless API handler
+```
 
 ## Troubleshooting
 
 ### Common Issues
-1. Device not recording
-   - Check microphone connections
-   - Verify ADC pin configuration
-   - Check serial output for voltage levels
 
-2. No WiFi connection
-   - Reset WiFi settings by holding boot button
+1. WiFi Connection Problems
+   - Reset configuration by holding boot button
    - Check serial output for connection status
-   - Verify network credentials
+   - Verify network credentials in portal
 
-3. No response from ChatGPT
-   - Check val.town function URL
-   - Verify internet connection
-   - Monitor serial output for API responses
+2. Recording Issues
+   - Check microphone connections
+   - Verify ADC readings in debug mode
+   - Adjust voice detection threshold
 
-### Debug Mode
-Enable debug output by uncommenting `#define ENABLE_DEBUG` in Recorder.h
+3. Display Problems
+   - Verify SPI connections
+   - Check power supply voltage
+   - Update TFT_eSPI configuration
+
+### Error Messages
+
+- "Wifi: X" - No network connection
+- "Error: processing request" - API communication failed
+- "Error: recording failed" - Audio capture issue
 
 ## Contributing
 
 1. Fork the repository
 2. Create a feature branch
-3. Make your changes
-4. Submit a pull request
+3. Follow existing code style
+4. Add unit tests if applicable
+5. Submit a pull request
 
 ## License
-This project is licensed under the MIT License. See LICENSE file for details.
+
+This project is licensed under the MIT License.
 
 ## Acknowledgments
+
 - OpenAI for ChatGPT and Whisper APIs
-- Waveshare for ESP32-S3 development board
+- Waveshare for ESP32-S3 hardware
 - LVGL team for graphics library
-- val.town for serverless function hosting
+- val.town for serverless hosting
+- Open source community for libraries and tools
