@@ -35,7 +35,7 @@ float acc[3], gyro[3], totalAccel, totalGyro;
 unsigned int tim_count = 0;
 const float ACCEL_THRESHOLD = 3000.0f;
 unsigned long lastShakeCheck = 0;
-const int RESPONSE_DISPLAY_DURATION = 15000;
+const int RESPONSE_DISPLAY_DURATION = 7000;
 
 // Magic 8 ball responses
 const char *responses[] = {
@@ -131,6 +131,7 @@ void uploadWAVFile(uint8_t *buffer, size_t bufferSize)
     {
       unsigned long currentTime = millis();
       lastUIUpdate = currentTime;
+      responseStartTime = currentTime;
       textManager.update(currentTime);
       animations.setLabelText(textManager.getCurrentText().c_str());
       lv_timer_handler();
@@ -140,7 +141,7 @@ void uploadWAVFile(uint8_t *buffer, size_t bufferSize)
       // Check if request was successful
       bool success = doc["success"].as<bool>();
       Serial.printf("Success: %s\n", success ? "true" : "false");
-
+      
       if (success)
       {
         // Print transcription
