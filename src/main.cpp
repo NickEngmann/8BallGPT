@@ -33,7 +33,7 @@ unsigned long lastShakeTime = 0;
 unsigned long responseDisplayStart = 0;
 float acc[3], gyro[3], totalAccel, totalGyro;
 unsigned int tim_count = 0;
-const float ACCEL_THRESHOLD = 3000.0f;
+const float ACCEL_THRESHOLD = 5000.0f;
 unsigned long lastShakeCheck = 0;
 const int RESPONSE_DISPLAY_DURATION = 7000;
 
@@ -113,7 +113,6 @@ void uploadWAVFile(uint8_t *buffer, size_t bufferSize)
   // Send the POST request
   int httpResponseCode = http.POST(postData, totalSize);
   free(postData);
-  vibration.stop();
   if (httpResponseCode > 0)
   {
     unsigned long currentTime = millis();
@@ -412,7 +411,6 @@ void loop()
 {
   unsigned long currentTime = millis();
   
-
   // Priority 1: Handle WiFi manager and essential LVGL tasks
   wifiManager.process();
   lv_timer_handler();
@@ -472,6 +470,7 @@ void loop()
       if (!isShowingResponse)
       {
         vibration.shortBuzz();
+        vibration.update();
         isShowingResponse = true;
         responseStartTime = currentTime;
         if (WiFi.status() == WL_CONNECTED)
@@ -484,8 +483,9 @@ void loop()
           ledLogger.setState(LEDLogger::SystemState::BUSY, LEDLogger::LEDPattern::PULSE);
           animations.setLabelText(textManager.getCurrentText().c_str());
           lv_timer_handler();
-          uploadWAVFile(wavData, wavSize);
           vibration.stop();
+          vibration.update();
+          uploadWAVFile(wavData, wavSize);
         }
         else
         {
@@ -495,6 +495,8 @@ void loop()
           textManager.setState(TextStateManager::DisplayState::RESPONSE,
                                responses[responseIndex]);
           ledLogger.setState(LEDLogger::SystemState::WARNING, LEDLogger::LEDPattern::BLINK);
+          vibration.stop();
+          vibration.update();
         }
       }
       // Check if we've shown the response long enough
@@ -509,6 +511,8 @@ void loop()
         animations.setTriangleColor(0, 0, 255);
         textManager.setState(TextStateManager::DisplayState::IDLE);
         ledLogger.setState(LEDLogger::SystemState::NORMAL);
+        QMI8658_read_xyz(acc, gyro, &tim_count);
+        animations.updateTrianglePosition(gyro[0], gyro[1]);
       }
     }
 

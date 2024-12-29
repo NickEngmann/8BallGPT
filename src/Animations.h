@@ -72,7 +72,7 @@ private:
   static constexpr float GYRO_SENSITIVITY = 0.08f;
   static constexpr float IDLE_AMPLITUDE = 15.0f;
   static constexpr float IDLE_SPEED = 0.001f;
-  static constexpr float SCREEN_MARGIN = 0.85f;
+  static constexpr float SCREEN_MARGIN = 0.4f;
   static constexpr float EDGE_BUFFER = 0.15f;    // Maximum amount triangle can go over edge
   static constexpr uint16_t FONT_REDUCTION = 90; // Font size reduction to 90% of original
 

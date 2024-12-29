@@ -56,13 +56,15 @@ void AnimationManager::initializeTriangle()
   lv_obj_set_style_text_color(_label, lv_color_white(), LV_PART_MAIN);
   lv_obj_set_style_text_align(_label, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
 
-  // Add font size reduction
-  lv_obj_set_style_text_font(_label, &lv_font_montserrat_14, LV_PART_MAIN); // Use smaller font
-  // Or alternatively, scale the existing font:
-  // lv_obj_set_style_text_line_space(_label, -2, LV_PART_MAIN);  // Reduce line spacing
+  lv_obj_set_style_text_font(_label, &lv_font_montserrat_14, LV_PART_MAIN);
+  lv_obj_set_width(_label, triangleSize - 20);               // Add more padding for text
+  lv_obj_set_style_pad_all(_label, 10, LV_PART_MAIN);        // Add padding all around
+  lv_obj_set_style_text_line_space(_label, 5, LV_PART_MAIN); // Adjust line spacing
 
   lv_label_set_text(_label, "DISCONNECTED");
-  lv_obj_align(_label, LV_ALIGN_CENTER, 0, 0);
+  // lv_obj_align(_label, LV_ALIGN_CENTER, 0, 0);
+  // lv_obj_center(_label);
+  lv_obj_set_style_align(_label, LV_ALIGN_CENTER, LV_PART_MAIN);
   lv_label_set_long_mode(_label, LV_LABEL_LONG_WRAP);
   lv_obj_set_width(_label, (triangleSize - 30)); // Reduced width for better edge handling
 
@@ -177,9 +179,8 @@ void AnimationManager::updateTrianglePosition(float gyro_x, float gyro_y)
   }
   else
   {
-    // Invert gyro inputs to match intuitive direction
-    _target_x += gyro_y * GYRO_SENSITIVITY; // Changed from += to -=
-    _target_y -= gyro_x * GYRO_SENSITIVITY; // Changed from += to -=
+    _target_x -= gyro_x * GYRO_SENSITIVITY;
+    _target_y -= gyro_y * GYRO_SENSITIVITY;
   }
 
   constrainPosition();
