@@ -1,40 +1,41 @@
 #include <Arduino.h>
-#include <lvgl.h>
-// #include <SPIFFS.h>
-#include <Adafruit_LSM6DS3TRC.h>
 #include <WiFiManager.h>
 #include <WiFi.h>
-#include "AudioTools.h"
+#include <HTTPClient.h>
+#include <QMI8658.h>
+#include <DEV_Config.h>
+#include "Recorder.h"
+#include "Animations.h"
+#include <algorithm>
+#include <ArduinoJson.h>
+#include "TextStateManager.h"
+#include "VibrationManager.h"
+#include "LEDLogger.h"
 
-// Display includes
-#define USE_TFT_ESPI_LIBRARY
-#include "lv_xiao_round_screen.h"
-
-// I2S configuration
-const int i2s_bck = 44; // BCLK -> GPIO44 (RX)
-const int i2s_ws = -1;  // not
-const int i2s_data = 3; // DOUT -> GPIO3 (A2)
-const int sample_rate = 44100;
-const int channels = 2;
-const int bits_per_sample = 16;
-
-// Audio objects
-I2SStream i2sStream;
-CsvOutput<int32_t> csvStream(Serial);
-StreamCopy copier(csvStream, i2sStream);
-AudioInfo info(sample_rate, channels, bits_per_sample);
+// Display configuration
+static const uint16_t screenWidth = 240;
+static const uint16_t screenHeight = 240;
 
 // Global objects
-Adafruit_LSM6DS3TRC lsm6ds3trc;
 WiFiManager wifiManager;
+VoiceActivatedRecorder recorder;
+AnimationManager animations(screenWidth, screenHeight);
+TextStateManager textManager;
+VibrationManager vibration(5,13);
+LEDLogger ledLogger(3);
 
-// Global variables
+// State variables
 bool isShaking = false;
-bool isRecording = false;
+bool recordingTriggered = false;
+bool isShowingResponse = false;             // Add this to track response state
+unsigned long responseStartTime = 0;        // Rename for clarity
 unsigned long lastShakeTime = 0;
-unsigned long phraseStartTime = 0;
-const int SHAKE_THRESHOLD = 20;
-const char *currentState = "NORMAL"; // NORMAL, SHAKING, SHOWING_PHRASE
+unsigned long responseDisplayStart = 0;
+float acc[3], gyro[3], totalAccel, totalGyro;
+unsigned int tim_count = 0;
+const float ACCEL_THRESHOLD = 5000.0f;
+unsigned long lastShakeCheck = 0;
+const int RESPONSE_DISPLAY_DURATION = 7000;
 
 // Magic 8 ball responses
 const char *responses[] = {
@@ -47,97 +48,326 @@ const char *responses[] = {
     "Very doubtful",
     "Concentrate and ask again"};
 
-// UI elements
-lv_obj_t *wifi_label;
-lv_obj_t *magic_label;
-
-// Function declarations
-bool checkShaking(sensors_event_t &accel);
-void startRecording();
-void stopRecording();
-void updateWiFiStatus(void *parameter);
-
-// Function to check if device is being shaken
-bool checkShaking(sensors_event_t &accel)
+bool checkForShake()
 {
-  float magnitude = sqrt(
-      accel.acceleration.x * accel.acceleration.x +
-      accel.acceleration.y * accel.acceleration.y +
-      accel.acceleration.z * accel.acceleration.z);
-  return abs(magnitude - 9.81) > SHAKE_THRESHOLD;
+  QMI8658_read_xyz(acc, gyro, &tim_count);
+  totalAccel = sqrt((acc[0] * acc[0]) + (acc[1] * acc[1]) + (acc[2] * acc[2]));
+  totalGyro = sqrt((gyro[0] * gyro[0]) + (gyro[1] * gyro[1]) + (gyro[2] * gyro[2]));
+  return (totalAccel > ACCEL_THRESHOLD);
 }
 
-void startRecording()
+void uploadWAVFile(uint8_t *buffer, size_t bufferSize)
 {
-  if (!isRecording)
+  if (!buffer || bufferSize == 0)
   {
-    Serial.println("Starting audio recording...");
-
-    auto config = i2sStream.defaultConfig(RX_MODE);
-    config.copyFrom(info);
-    config.signal_type = PDM;
-    config.use_apll = false;
-    config.pin_bck = i2s_bck;
-    config.pin_ws = i2s_ws;
-    config.pin_data = i2s_data;
-
-    i2sStream.begin(config);
-    csvStream.begin(info);
-    isRecording = true;
+    Serial.println("Invalid buffer for upload");
+    return;
   }
-}
+  unsigned long lastUIUpdate = millis();
+  const int UI_UPDATE_INTERVAL = 500; // Update UI every 100ms
 
-void stopRecording()
-{
-  if (isRecording)
+  HTTPClient http;
+
+  // Replace with your val.town function URL - you'll get this after deploying the function
+  const char *uploadEndpoint = "https://cyrilengmann-efficientcoppercat.web.val.run";
+
+  Serial.printf("Uploading WAV file (%d bytes) to val.town\n", bufferSize);
+
+  http.begin(uploadEndpoint);
+
+  // Set headers for multipart form data
+  String boundary = "AudioBoundary";
+  String contentType = "multipart/form-data; boundary=" + boundary;
+  http.addHeader("Content-Type", contentType);
+
+  // Create the multipart form data
+  String head = "--" + boundary + "\r\n";
+  head += "Content-Disposition: form-data; name=\"file\"; filename=\"recording.wav\"\r\n";
+  head += "Content-Type: audio/wav\r\n\r\n";
+
+  String tail = "\r\n--" + boundary + "--\r\n";
+
+  // Calculate total size and allocate buffer
+  size_t totalSize = head.length() + bufferSize + tail.length();
+  uint8_t *postData = (uint8_t *)malloc(totalSize);
+
+  if (!postData)
   {
-    Serial.println("Stopping audio recording...");
-    i2sStream.end();
-    csvStream.end();
-    isRecording = false;
+    Serial.println("Failed to allocate memory for POST data");
+    http.end();
+    return;
   }
-}
 
-// Callback for WiFi status updates
-void updateWiFiStatus(void *parameter)
-{
-  for (;;)
+  // Assemble the POST data
+  size_t offset = 0;
+  memcpy(postData, head.c_str(), head.length());
+  offset += head.length();
+  memcpy(postData + offset, buffer, bufferSize);
+  offset += bufferSize;
+  memcpy(postData + offset, tail.c_str(), tail.length());
+  unsigned long currentTime = millis();
+  lastUIUpdate = currentTime;
+  textManager.update(currentTime);
+  animations.setLabelText(textManager.getCurrentText().c_str());
+  lv_timer_handler();
+  // Send the POST request
+  int httpResponseCode = http.POST(postData, totalSize);
+  free(postData);
+  if (httpResponseCode > 0)
   {
-    if (WiFi.status() == WL_CONNECTED)
+    unsigned long currentTime = millis();
+    lastUIUpdate = currentTime;
+    textManager.update(currentTime);
+    animations.setLabelText(textManager.getCurrentText().c_str());
+    lv_timer_handler();
+    String response = http.getString();
+
+    // Parse the JSON response using ArduinoJson 7.x
+    JsonDocument doc;
+    DeserializationError error = deserializeJson(doc, response);
+
+    if (!error)
     {
-      String ip = WiFi.localIP().toString();
-      lv_label_set_text_fmt(wifi_label, "WiFi: Connected\nIP: %s", ip.c_str());
+      unsigned long currentTime = millis();
+      lastUIUpdate = currentTime;
+      responseStartTime = currentTime;
+      textManager.update(currentTime);
+      animations.setLabelText(textManager.getCurrentText().c_str());
+      lv_timer_handler();
+      // Print debug information
+      Serial.println("\n=== API Response Debug Info ===");
+
+      // Check if request was successful
+      bool success = doc["success"].as<bool>();
+      Serial.printf("Success: %s\n", success ? "true" : "false");
+      
+      if (success)
+      {
+        // Print transcription
+        const char *transcription = doc["transcription"].as<const char *>();
+        if (transcription)
+        {
+          Serial.printf("Transcription: %s\n", transcription);
+        }
+
+        // Print GPT response
+        const char *gptResponse = doc["response"].as<const char *>();
+        if (gptResponse)
+        {
+          Serial.printf("GPT Response: %s\n", gptResponse);
+          animations.setTriangleColor(0, 0, 255);
+          textManager.setState(TextStateManager::DisplayState::RESPONSE, gptResponse);
+        }
+
+        // Print timing information
+        JsonObject timings = doc["debug"]["timings"];
+        if (!timings.isNull())
+        {
+          Serial.println("\nAPI Timings:");
+          Serial.printf("Whisper Duration: %dms\n", timings["whisperDuration"].as<int>());
+          Serial.printf("GPT Duration: %dms\n", timings["gptDuration"].as<int>());
+          Serial.printf("Total Duration: %dms\n", timings["totalDuration"].as<int>());
+        }
+
+        // Print processing steps
+        JsonArray steps = doc["debug"]["steps"];
+        if (!steps.isNull())
+        {
+          Serial.println("\nProcessing Steps:");
+          for (JsonVariant step : steps)
+          {
+            Serial.printf("- %s\n", step.as<const char *>());
+          }
+        }
+      }
+      else
+      {
+        // Handle error case
+        const char *errorMsg = doc["error"].as<const char *>();
+        Serial.printf("\nError: %s\n", errorMsg ? errorMsg : "Unknown error");
+
+        // Print error details if available
+        JsonArray errors = doc["debug"]["errors"];
+        if (!errors.isNull())
+        {
+          Serial.println("\nError Details:");
+          for (JsonVariant error : errors)
+          {
+            Serial.printf("- %s\n", error["message"].as<const char *>());
+            Serial.printf("  Time: %s\n", error["timestamp"].as<const char *>());
+          }
+        }
+
+        // Update display with error message
+        animations.setTriangleColor(255, 0, 0); // Red for error
+        textManager.setState(TextStateManager::DisplayState::RESPONSE,
+                             String("Error: processing request"));
+      }
     }
     else
     {
-      lv_label_set_text(wifi_label, "WiFi: Disconnected");
+      Serial.printf("JSON parsing failed: %s\n", error.c_str());
+      Serial.printf("Raw response: %s\n", response.c_str());
+
+      animations.setTriangleColor(255, 0, 0);
+      textManager.setState(TextStateManager::DisplayState::RESPONSE,
+                           String("Error: Failed to parse response"));
     }
-    vTaskDelay(pdMS_TO_TICKS(5000));
+  }
+  else
+  {
+    Serial.printf("HTTP Error: %s\n", http.errorToString(httpResponseCode).c_str());
+    animations.setTriangleColor(255, 0, 0);
+    textManager.setState(TextStateManager::DisplayState::RESPONSE,
+                         String("Error: Failed to connect"));
+  }
+
+  http.end();
+}
+
+void uploadWAVFileLocal(uint8_t *buffer, size_t bufferSize)
+{
+  if (!buffer || bufferSize == 0)
+  {
+    Serial.println("Invalid buffer for upload");
+    return;
+  }
+
+  HTTPClient http;
+
+  // Configure the upload endpoint - use your computer's IP
+  const char *uploadEndpoint = "http://192.168.1.108:5000/upload_wav";
+
+  Serial.printf("Uploading WAV file (%d bytes) to %s\n", bufferSize, uploadEndpoint);
+
+  http.begin(uploadEndpoint);
+
+  // Set headers for multipart form data
+  String boundary = "AudioBoundary";
+  String contentType = "multipart/form-data; boundary=" + boundary;
+  http.addHeader("Content-Type", contentType);
+
+  // Create the multipart form data
+  String head = "--" + boundary + "\r\n";
+  head += "Content-Disposition: form-data; name=\"file\"; filename=\"recording.wav\"\r\n";
+  head += "Content-Type: audio/wav\r\n\r\n";
+
+  String tail = "\r\n--" + boundary + "--\r\n";
+
+  // Create a temporary buffer for the complete POST data
+  size_t totalSize = head.length() + bufferSize + tail.length();
+  uint8_t *postData = (uint8_t *)malloc(totalSize);
+
+  if (!postData)
+  {
+    Serial.println("Failed to allocate memory for POST data");
+    http.end();
+    return;
+  }
+
+  // Copy the parts into the buffer
+  size_t offset = 0;
+
+  // Copy header
+  memcpy(postData, head.c_str(), head.length());
+  offset += head.length();
+
+  // Copy WAV data
+  memcpy(postData + offset, buffer, bufferSize);
+  offset += bufferSize;
+
+  // Copy tail
+  memcpy(postData + offset, tail.c_str(), tail.length());
+
+  // Send the POST request
+  int httpResponseCode = http.POST(postData, totalSize);
+
+  // Free the temporary buffer
+  free(postData);
+
+  if (httpResponseCode > 0)
+  {
+    Serial.printf("HTTP Response code: %d\n", httpResponseCode);
+    String response = http.getString();
+    Serial.println(response);
+  }
+  else
+  {
+    Serial.printf("Error on sending POST: %s\n", http.errorToString(httpResponseCode).c_str());
+  }
+
+  http.end();
+}
+
+// WiFi status update task
+void updateWiFiStatus(void *parameter)
+{
+  TextStateManager *textManager = (TextStateManager *)parameter;
+  for (;;)
+  {
+    if (WiFi.status() != WL_CONNECTED)
+    {
+      textManager->setState(TextStateManager::DisplayState::ERROR);
+      ledLogger.setState(LEDLogger::SystemState::ERROR, LEDLogger::LEDPattern::BLINK);
+    }
+    else if (textManager->getState() == TextStateManager::DisplayState::ERROR)
+    {
+      textManager->setState(TextStateManager::DisplayState::IDLE);
+    }
+    vTaskDelay(pdMS_TO_TICKS(30000));
   }
 }
 
 void setup()
 {
   Serial.begin(115200);
-  AudioToolsLogger.begin(Serial, AudioToolsLogLevel::Info);
-  // Initialize accelerometer
-  if (!lsm6ds3trc.begin_I2C())
-  {
-    Serial.println("Failed to find LSM6DS3TR-C chip");
-    while (1)
-    {
-      delay(10);
-    }
-  }
-  Serial.println("LSM6DS3TR-C Found!");
-  lsm6ds3trc.configInt1(false, false, true); // accelerometer DRDY on INT1
-  lsm6ds3trc.configInt2(false, true, false); // gyro DRDY on INT2
-  // Initialize display
-  lv_init();
-  lv_xiao_disp_init();
-  // lv_xiao_touch_init();
 
-  // WiFi setup
+  ledLogger.begin();
+  ledLogger.setState(LEDLogger::SystemState::STARTUP, LEDLogger::LEDPattern::PULSE);
+
+  if (psramInit())
+  {
+    Serial.printf("PSRAM initialized. Size: %d MB\n", ESP.getPsramSize() / 1024 / 1024);
+    Serial.printf("Free PSRAM: %d KB\n", ESP.getFreePsram() / 1024);
+  }
+  else
+  {
+    Serial.println("PSRAM initialization failed!");
+  }
+
+  // Initialize hardware
+  if (DEV_Module_Init() != 0)
+  {
+    Serial.println("DEV_Module_Init failed!");
+  }
+  else
+  {
+    Serial.println("DEV_Module_Init success!");
+  }
+
+  // Initialize sensors
+  Serial.println("Initializing QMI8658...");
+  if (QMI8658_init())
+  {
+    Serial.println("QMI8658 init success!");
+  }
+  else
+  {
+    Serial.println("QMI8658 init failed!");
+  }
+
+  // Initialize display and animations
+  if (!animations.begin())
+  {
+    Serial.println("Failed to initialize display!");
+    return;
+  }
+  animations.initializeTriangle();
+
+  vibration.begin();
+  vibration.shortBuzz(); // Indicate startup
+
+  // Initialize WiFi
   WiFi.mode(WIFI_STA);
   IPAddress portalIP(8, 8, 4, 4);
   IPAddress gateway(8, 8, 4, 4);
@@ -145,86 +375,155 @@ void setup()
   wifiManager.setAPStaticIPConfig(portalIP, gateway, subnet);
   wifiManager.setConfigPortalTimeout(180);
   wifiManager.setConfigPortalBlocking(false);
-  wifiManager.autoConnect("Magic8Ball_AP");
-
-  // Create UI elements
-  wifi_label = lv_label_create(lv_scr_act());
-  lv_obj_set_pos(wifi_label, 10, 10);
-  lv_label_set_text(wifi_label, "WiFi: Disconnected");
-
-  magic_label = lv_label_create(lv_scr_act());
-  lv_obj_align(magic_label, LV_ALIGN_CENTER, 0, 0);
-  lv_label_set_text(magic_label, "Magic 8 Ball");
+  wifiManager.autoConnect("MagicGPT8Ball");
 
   // Start WiFi monitoring task
   xTaskCreate(
       updateWiFiStatus,
       "WiFiStatus",
       2048,
-      NULL,
+      &textManager, // Pass textManager as parameter
       1,
       NULL);
+
+  // Initialize audio recorder
+  if (!recorder.begin())
+  {
+    Serial.println("Failed to initialize audio recorder!");
+  }
+  else
+  {
+    Serial.println("Audio recorder initialized successfully");
+  }
+
+  // Random seed for responses
+  randomSeed(analogRead(2));
+
+  if (WiFi.status() == WL_CONNECTED)
+  {
+    ledLogger.setState(LEDLogger::SystemState::NORMAL);
+  }
+  Serial.println("Initialization Complete!");
+  textManager.setState(TextStateManager::DisplayState::IDLE);
 }
 
 void loop()
 {
-  wifiManager.process();
-
-  sensors_event_t accel;
-  sensors_event_t gyro;
-  sensors_event_t temp;
-  lsm6ds3trc.getEvent(&accel, &gyro, &temp);
-
   unsigned long currentTime = millis();
-
-  // Check device state and update display accordingly
-  if (strcmp(currentState, "NORMAL") == 0)
-  {
-    if (checkShaking(accel))
-    {
-      currentState = "SHAKING";
-      isShaking = true;
-      lastShakeTime = currentTime;
-      lv_label_set_text(magic_label, "Shaking");
-      startRecording();
-      lv_timer_handler();
-    }
-  }
-  else if (strcmp(currentState, "SHAKING") == 0)
-  {
-    if (!checkShaking(accel))
-    {
-      if (currentTime - lastShakeTime > 5000)
-      {
-        currentState = "SHOWING_PHRASE";
-        phraseStartTime = currentTime;
-        stopRecording();
-        int responseIndex = random(8);
-        lv_label_set_text(magic_label, responses[responseIndex]);
-      }
-    }
-    else
-    {
-      lastShakeTime = currentTime;
-      // Copy audio data while shaking
-      if (isRecording)
-      {
-        copier.copy();
-      }
-    }
-  }
-  else if (strcmp(currentState, "SHOWING_PHRASE") == 0)
-  {
-    if (currentTime - phraseStartTime > 6000)
-    {
-      currentState = "NORMAL";
-      lv_label_set_text(magic_label, "Magic 8 Ball");
-    }
-  }
-
   
-  if (strcmp(currentState, "SHAKING") != 0){
-    lv_timer_handler();
-    delay(50);
+  // Priority 1: Handle WiFi manager and essential LVGL tasks
+  wifiManager.process();
+  lv_timer_handler();
+  vibration.update();
+  ledLogger.update();
+
+  // Priority 2: Handle active recording
+  if (recorder.isRecording())
+  {
+    // When recording, focus on audio capture
+    recorder.update();
+
+    // Minimal UI updates during recording (once per second)
+    if (currentTime - lastShakeCheck >= 1000)
+    {
+      lastShakeCheck = currentTime;
+      textManager.update(currentTime);
+      animations.setLabelText(textManager.getCurrentText().c_str());
+      ledLogger.setState(LEDLogger::SystemState::BUSY, LEDLogger::LEDPattern::PULSE);
+    }
+    return; // Exit loop to prioritize next recording cycle
+  }
+
+  // Normal operation mode (not recording)
+  // Update at 60Hz (every ~16ms)
+  if (currentTime - lastShakeCheck >= 16)
+  {
+    lastShakeCheck = currentTime;
+    textManager.update(currentTime);
+
+    // Check for shake to start recording
+    if (checkForShake() && !recordingTriggered &&
+        textManager.getState() == TextStateManager::DisplayState::IDLE)
+    {
+      // Start new recording session
+      recordingTriggered = true;
+      isShaking = true;
+      animations.setTriangleColor(255, 0, 0);
+      textManager.setState(TextStateManager::DisplayState::RECORDING);
+      animations.moveToCenter();
+      animations.setShaking(true);
+      vibration.mediumBuzz();
+      ledLogger.setState(LEDLogger::SystemState::BUSY, LEDLogger::LEDPattern::BLINK);
+      if (recorder.startRecording())
+      {
+        Serial.println("Recording started");
+      }
+      else
+      {
+        Serial.println("Failed to start recording");
+        ledLogger.setState(LEDLogger::SystemState::ERROR, LEDLogger::LEDPattern::FAST_BLINK);
+      }
+    }
+    // Check if recording just finished
+    else if (recordingTriggered && !recorder.isRecording())
+    {
+      if (!isShowingResponse)
+      {
+        vibration.shortBuzz();
+        vibration.update();
+        isShowingResponse = true;
+        responseStartTime = currentTime;
+        if (WiFi.status() == WL_CONNECTED)
+        {
+          // Upload the WAV file
+          uint8_t *wavData = recorder.getBuffer();
+          size_t wavSize = recorder.getBufferSize();
+          Serial.printf("Recording finished. Captured %d bytes\n", wavSize);
+          textManager.setState(TextStateManager::DisplayState::THINKING);
+          ledLogger.setState(LEDLogger::SystemState::BUSY, LEDLogger::LEDPattern::PULSE);
+          animations.setLabelText(textManager.getCurrentText().c_str());
+          lv_timer_handler();
+          vibration.stop();
+          vibration.update();
+          uploadWAVFile(wavData, wavSize);
+        }
+        else
+        {
+          // Show random response
+          int responseIndex = random(0, sizeof(responses) / sizeof(responses[0]));
+          animations.setTriangleColor(0, 0, 255);
+          textManager.setState(TextStateManager::DisplayState::RESPONSE,
+                               responses[responseIndex]);
+          ledLogger.setState(LEDLogger::SystemState::WARNING, LEDLogger::LEDPattern::BLINK);
+          vibration.stop();
+          vibration.update();
+        }
+      }
+      // Check if we've shown the response long enough
+      else if (currentTime - responseStartTime >= RESPONSE_DISPLAY_DURATION)
+      {
+        // Reset all states
+        vibration.stop();
+        recordingTriggered = false;
+        isShowingResponse = false;
+        isShaking = false;
+        animations.setShaking(false);
+        animations.setTriangleColor(0, 0, 255);
+        textManager.setState(TextStateManager::DisplayState::IDLE);
+        ledLogger.setState(LEDLogger::SystemState::NORMAL);
+        QMI8658_read_xyz(acc, gyro, &tim_count);
+        animations.updateTrianglePosition(gyro[0], gyro[1]);
+      }
+    }
+
+    // Update animations when not recording or transitioning
+    if (!isShaking && !animations.isTransitioning())
+    {
+      QMI8658_read_xyz(acc, gyro, &tim_count);
+      animations.updateTrianglePosition(gyro[0], gyro[1]);
+    }
+
+    // Update display text
+    animations.setLabelText(textManager.getCurrentText().c_str());
   }
 }
