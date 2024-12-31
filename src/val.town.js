@@ -11,6 +11,12 @@ export async function processAudioAndGetResponse(req) {
   try {
     debugInfo.timestamps.start = new Date().toISOString();
 
+    // Validate device token
+    const deviceToken = req.headers.get('X-Device-Token');
+    if (!deviceToken || deviceToken !== process.env.VALID_DEVICE_TOKEN) {
+      throw new Error('Invalid or missing device token');
+    }
+
     // Check request method
     debugInfo.requestInfo.method = req.method;
     if (req.method !== "POST") {
@@ -191,7 +197,7 @@ export async function processAudioAndGetResponse(req) {
         debug: debugInfo,
       }),
       {
-        status: 500,
+        status: error.message.includes('device token') ? 401 : 500,
         headers: { "Content-Type": "application/json" },
       },
     );

@@ -103,6 +103,54 @@ The Magic (GPT)8 Ball is a modern reinvention of the classic fortune-telling toy
    pio run --target upload
    ```
 
+### Environment Configuration
+
+1. In the project root directory, create a `.env` file with your val.town endpoint and device token:
+
+   ```ini
+   VALTOWN_URL="https://your-valtown-endpoint.val.run"
+   DEVICE_TOKEN="your-device-token"
+   ```
+
+2. For reference, an `.env.example` file is provided:
+
+   ```ini
+   VALTOWN_URL="https://example-valtown-endpoint.val.run"
+   DEVICE_TOKEN="example-device-token"
+   ```
+
+   **Note:** Never commit your actual `.env` file to version control. The `.env.example` file serves as a template.
+
+3. File locations should follow this structure:
+
+   ```
+   MagicGPT8Ball/
+   ├── .env                  # Your actual configuration (do not commit)
+   ├── .env.example         # Template for others (safe to commit)
+   ├── generate_env.py      # Handles environment setup
+   ├── data/                # Generated during build
+   └── ...
+   ```
+
+4. During build:
+   - The system automatically copies your `.env` file to the device's filesystem
+   - If `.env` is missing, it will use `.env.example` as a fallback
+   - Environment variables are securely stored on the device
+
+5. To update configuration:
+   - Modify `.env` file
+   - Rebuild and upload filesystem:
+
+     ```bash
+     pio run -t uploadfs
+     ```
+
+   - Upload program:
+
+     ```bash
+     pio run -t upload
+     ```
+
 ## Usage Instructions
 
 ### First-Time Setup

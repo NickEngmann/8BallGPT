@@ -1,3 +1,5 @@
 .pio
 .vscode
 *.wav
+.env
+data/.env

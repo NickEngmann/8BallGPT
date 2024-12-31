@@ -11,6 +11,7 @@
 #include "TextStateManager.h"
 #include "VibrationManager.h"
 #include "LEDLogger.h"
+#include "Environment.h"
 
 // Display configuration
 static const uint16_t screenWidth = 240;
@@ -21,7 +22,7 @@ WiFiManager wifiManager;
 VoiceActivatedRecorder recorder;
 AnimationManager animations(screenWidth, screenHeight);
 TextStateManager textManager;
-VibrationManager vibration(5,13);
+VibrationManager vibration(45,46);
 LEDLogger ledLogger(3);
 
 // State variables
@@ -66,28 +67,35 @@ void uploadWAVFile(uint8_t *buffer, size_t bufferSize)
   unsigned long lastUIUpdate = millis();
   const int UI_UPDATE_INTERVAL = 500; // Update UI every 100ms
 
+  String valtownUrl = Environment::getEnv("VALTOWN_URL");
+  String deviceToken = Environment::getEnv("DEVICE_TOKEN");
+
+  if (valtownUrl.isEmpty() || deviceToken.isEmpty())
+  {
+    Serial.println("Missing environment configuration");
+    animations.setTriangleColor(255, 0, 0);
+    textManager.setState(TextStateManager::DisplayState::RESPONSE,
+                         String("Error: Missing configuration"));
+    return;
+  }
+
   HTTPClient http;
-
-  // Replace with your val.town function URL - you'll get this after deploying the function
-  const char *uploadEndpoint = "https://cyrilengmann-efficientcoppercat.web.val.run";
-
   Serial.printf("Uploading WAV file (%d bytes) to val.town\n", bufferSize);
+  http.begin(valtownUrl);
 
-  http.begin(uploadEndpoint);
-
-  // Set headers for multipart form data
+  // Set headers for multipart form data and authentication
   String boundary = "AudioBoundary";
   String contentType = "multipart/form-data; boundary=" + boundary;
   http.addHeader("Content-Type", contentType);
+  http.addHeader("X-Device-Token", deviceToken);
 
-  // Create the multipart form data
+  // Rest of the upload function remains the same...
   String head = "--" + boundary + "\r\n";
   head += "Content-Disposition: form-data; name=\"file\"; filename=\"recording.wav\"\r\n";
   head += "Content-Type: audio/wav\r\n\r\n";
 
   String tail = "\r\n--" + boundary + "--\r\n";
 
-  // Calculate total size and allocate buffer
   size_t totalSize = head.length() + bufferSize + tail.length();
   uint8_t *postData = (uint8_t *)malloc(totalSize);
 
@@ -334,7 +342,16 @@ void setup()
   {
     Serial.println("PSRAM initialization failed!");
   }
-
+  if (Environment::begin())
+  {
+    Serial.println("Environment loaded successfully");
+    Serial.println("ValTown URL: " + Environment::getEnv("VALTOWN_URL"));
+    // Serial.println("Device Token: " + Environment::getEnv("DEVICE_TOKEN"));
+  }
+  else
+  {
+    Serial.println("Failed to load environment configuration");
+  }
   // Initialize hardware
   if (DEV_Module_Init() != 0)
   {
